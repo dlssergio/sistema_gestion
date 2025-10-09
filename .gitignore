@@ -1,0 +1,105 @@
+# ===================================
+# BACKEND (Django / Python)
+# ===================================
+sistema_gestion/__pycache__/
+sistema_gestion/**/__pycache__/
+sistema_gestion/*.py[cod]
+sistema_gestion/*$py.class
+sistema_gestion/*.so
+sistema_gestion/.Python
+sistema_gestion/env/
+sistema_gestion/venv/
+sistema_gestion/ENV/
+sistema_gestion/.venv/
+sistema_gestion/*.log
+sistema_gestion/db.sqlite3
+sistema_gestion/db.sqlite3-journal
+sistema_gestion/media/
+sistema_gestion/staticfiles/
+sistema_gestion/*.pot
+sistema_gestion/*.pyc
+sistema_gestion/__pycache__/
+
+# ===================================
+# FRONTEND (Vue / Node)
+# ===================================
+frontend/node_modules/
+frontend/dist/
+frontend/.cache/
+frontend/.DS_Store
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.env.local
+frontend/.env.production
+frontend/.env.development
+
+# ===================================
+# DOCKER
+# ===================================
+# Docker files
+*.dockerfile
+docker-compose.override.yml
+docker-compose.override.yaml
+docker-compose.*.yml
+docker-compose.*.yaml
+*.env
+**/Dockerfile
+**/docker-compose*.yml
+**/docker-compose*.yaml
+**/docker-compose.override.*
+**/.dockerignore
+
+# Containers & Volumes
+docker-compose.override.yml
+docker-compose.override.yaml
+*.log
+*.pid
+*.sock
+tmp/
+var/
+data/
+
+# ===================================
+# CONFIGURACIÓN / IDEs
+# ===================================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ===================================
+# ARCHIVOS DE ENTORNO / SECRETS
+# ===================================
+.env
+*.env
+.env.*      # otros posibles archivos de entorno
+
+# ===================================
+# VARIOS / TEMPORALES / BACKUPS
+# ===================================
+*.bak
+*.tmp
+*.log
+*.pid
+*.swp
+*.swo
+*.old
+*.orig
+*.rej
+*.class
+
+# ===================================
+# SISTEMA / OS
+# ===================================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ===================================
+# GIT
+# ===================================
+# No ignore .git/ nunca
