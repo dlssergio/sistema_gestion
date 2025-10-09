@@ -1,0 +1,45 @@
+# ===================================
+# BACKEND (Django/Python)
+# ===================================
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.py[cod]
+backend/*$py.class
+backend/*.so
+backend/.Python
+backend/env/
+backend/venv/
+backend/ENV/
+backend/*.log
+backend/db.sqlite3
+backend/db.sqlite3-journal
+backend/media/
+backend/staticfiles/
+
+# ===================================
+# FRONTEND (Vue.js/Node)
+# ===================================
+sistema_gestion/node_modules/
+sistema_gestion/dist/
+sistema_gestion/.cache/
+sistema_gestion/.DS_Store
+sistema_gestion/npm-debug.log*
+sistema_gestion/yarn-debug.log*
+sistema_gestion/yarn-error.log*
+
+# ===================================
+# GENERAL
+# ===================================
+.env
+*.env
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ===================================
+# GIT
+# ===================================
+.git/
