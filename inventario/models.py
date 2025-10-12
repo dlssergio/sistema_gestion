@@ -1,39 +1,54 @@
-# en inventario/models.py (Versión Corregida)
+# en inventario/models.py (VERSIÓN FINAL CON LÓGICA SAVE() CORREGIDA Y ROBUSTA)
 
 from django.db import models, transaction
-from django.db.models import Sum # <-- Importamos Sum para agregar
+from django.db.models import Sum
 from decimal import Decimal
-from parametros.models import Moneda, Contador, Impuesto
+from parametros.models import Contador, Impuesto, Moneda
+from djmoney.models.fields import MoneyField
+from djmoney.money import Money
+
 
 # ... (Clases Marca, Rubro, Deposito, StockArticulo sin cambios) ...
 class Marca(models.Model):
     nombre = models.CharField(max_length=100, unique=True, verbose_name="Nombre")
+
     def __str__(self): return self.nombre
+
     class Meta:
         verbose_name = "Marca"
         verbose_name_plural = "Marcas"
 
+
 class Rubro(models.Model):
     nombre = models.CharField(max_length=100, unique=True, verbose_name="Nombre")
+
     def __str__(self): return self.nombre
+
     class Meta:
         verbose_name = "Rubro"
         verbose_name_plural = "Rubros"
 
+
 class Deposito(models.Model):
     nombre = models.CharField(max_length=100, unique=True)
     direccion = models.CharField(max_length=255, blank=True, null=True)
-    es_principal = models.BooleanField(default=False, help_text="Marcar si este es el depósito principal o por defecto.")
+    es_principal = models.BooleanField(default=False,
+                                       help_text="Marcar si este es el depósito principal o por defecto.")
+
     def __str__(self): return self.nombre
+
     class Meta:
         verbose_name = "Depósito"
         verbose_name_plural = "Depósitos"
+
 
 class StockArticulo(models.Model):
     articulo = models.ForeignKey('Articulo', on_delete=models.CASCADE, related_name="stocks")
     deposito = models.ForeignKey(Deposito, on_delete=models.CASCADE)
     cantidad = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+
     def __str__(self): return f"{self.articulo.descripcion} en {self.deposito.nombre}: {self.cantidad}"
+
     class Meta:
         unique_together = ('articulo', 'deposito')
         verbose_name = "Stock por Depósito"
@@ -41,7 +56,6 @@ class StockArticulo(models.Model):
 
 
 class Articulo(models.Model):
-    # ... (Todos los campos de Articulo hasta 'administra_stock' no cambian) ...
     class UnidadMedida(models.TextChoices):
         UNIDADES = 'UN', 'Unidades'
         KILOGRAMO = 'KG', 'Kilogramo'
@@ -65,21 +79,14 @@ class Articulo(models.Model):
     rubro = models.ForeignKey(Rubro, on_delete=models.PROTECT, verbose_name="Rubro")
     unidad_medida = models.CharField(max_length=2, choices=UnidadMedida.choices, default=UnidadMedida.UNIDADES,
                                      verbose_name="Unidad de Medida")
-    moneda_costo = models.ForeignKey(Moneda, on_delete=models.PROTECT, related_name="articulos_costo",
-                                     verbose_name="Moneda de Costo", default=1)
-    precio_costo_original = models.DecimalField(max_digits=12, decimal_places=2, default=0,
-                                                verbose_name="Costo Original")
-    moneda_venta = models.ForeignKey(Moneda, on_delete=models.PROTECT, related_name="articulos_venta",
-                                     verbose_name="Moneda de Venta", default=1)
-    precio_venta_original = models.DecimalField(max_digits=12, decimal_places=2, default=0,
-                                                verbose_name="Venta Original")
-    utilidad = models.DecimalField(max_digits=5, decimal_places=2, default=0.00,
-                                   help_text="Porcentaje de ganancia sobre el costo en moneda base.",
+
+    precio_costo = MoneyField(max_digits=12, decimal_places=2, default_currency='ARS', default=0,
+                              verbose_name="Precio de Costo")
+    utilidad = models.DecimalField(max_digits=5, decimal_places=2, default=30.00,
+                                   help_text="Porcentaje de ganancia sobre el costo. Modificar este campo recalculará el Precio de Venta.",
                                    verbose_name="Utilidad (%)")
-    precio_costo_base = models.DecimalField(max_digits=12, decimal_places=2, default=0, editable=False,
-                                            verbose_name="Costo en Moneda Base")
-    precio_venta_base = models.DecimalField(max_digits=12, decimal_places=2, default=0, editable=False,
-                                            verbose_name="Venta en Moneda Base")
+    precio_venta = MoneyField(max_digits=12, decimal_places=2, default_currency='ARS', default=0,
+                              verbose_name="Precio de Venta")
     impuesto = models.ForeignKey(Impuesto, on_delete=models.PROTECT, verbose_name="Impuesto (IVA)")
     administra_stock = models.BooleanField(default=True, verbose_name="¿Administra Stock?")
     stock_minimo = models.DecimalField(max_digits=12, decimal_places=3, default=0, verbose_name="Stock Mínimo")
@@ -91,23 +98,18 @@ class Articulo(models.Model):
 
     @property
     def precio_final_calculado(self):
-        if self.precio_venta_base and self.impuesto:
-            precio_calculado = self.precio_venta_base * (Decimal('1.0') + (self.impuesto.tasa / Decimal('100.0')))
-            return round(precio_calculado, 2)
-        return Decimal('0.00')
+        if self.precio_venta and self.impuesto:
+            return self.precio_venta * (1 + (self.impuesto.tasa / Decimal(100)))
+        return Money(0, self.precio_venta.currency if self.precio_venta else 'ARS')
 
-    # --- NUEVA PROPIEDAD AÑADIDA ---
     @property
     def stock_total(self):
-        """Calcula y devuelve la suma del stock de este artículo en todos los depósitos."""
         if self.administra_stock:
-            # Usamos el related_name "stocks" y el agregador Sum de Django para eficiencia
             total = self.stocks.aggregate(total_stock=Sum('cantidad'))['total_stock']
             return total if total is not None else Decimal('0.000')
         return Decimal('0.000')
 
     def save(self, *args, **kwargs):
-        # ... (método save sin cambios) ...
         if not self.cod_articulo:
             try:
                 with transaction.atomic():
@@ -116,15 +118,40 @@ class Articulo(models.Model):
                     self.cod_articulo = f"{contador.prefijo}{str(contador.ultimo_valor).zfill(5)}"
                     contador.save()
             except Contador.DoesNotExist:
-                print("ADVERTENCIA: No se encontró el contador 'codigo_articulo'.")
-        if self.moneda_costo: self.precio_costo_base = self.precio_costo_original * self.moneda_costo.cotizacion
-        if self.moneda_venta: self.precio_venta_base = self.precio_venta_original * self.moneda_venta.cotizacion
-        if self.precio_costo_base and self.precio_costo_base > 0:
-            self.utilidad = ((self.precio_venta_base / self.precio_costo_base) - Decimal('1.0')) * Decimal('100.0')
-        else:
-            self.utilidad = Decimal('0.00')
-        super().save(*args, **kwargs)
+                pass
 
+        old_instance = Articulo.objects.filter(pk=self.pk).first()
+        is_new = old_instance is None
+
+        # Determinar qué campo cambió el usuario
+        utilidad_changed = not is_new and self.utilidad != old_instance.utilidad
+        costo_changed = not is_new and self.precio_costo != old_instance.precio_costo
+        venta_changed = not is_new and self.precio_venta != old_instance.precio_venta
+
+        try:
+            monedas = {m.simbolo: m.cotizacion for m in Moneda.objects.all()}
+            cotizacion_costo = monedas.get(str(self.precio_costo.currency), Decimal('1.0'))
+            cotizacion_venta = monedas.get(str(self.precio_venta.currency), Decimal('1.0'))
+
+            costo_en_base = self.precio_costo.amount * cotizacion_costo
+
+            # Prioridad 1: Si la utilidad o el costo cambian (o es nuevo), recalcular precio de venta.
+            if is_new or utilidad_changed or costo_changed:
+                venta_en_base = costo_en_base * (1 + (self.utilidad / Decimal(100)))
+                if cotizacion_venta > 0:
+                    self.precio_venta = Money(venta_en_base / cotizacion_venta, self.precio_venta.currency)
+
+            # Prioridad 2: Si el precio de venta cambió, recalcular la utilidad.
+            elif venta_changed:
+                if costo_en_base > 0:
+                    venta_en_base = self.precio_venta.amount * cotizacion_venta
+                    self.utilidad = ((venta_en_base / costo_en_base) - 1) * 100
+                else:
+                    self.utilidad = 0
+        except Exception as e:
+            print(f"ADVERTENCIA: No se pudieron realizar los cálculos de precios. Error: {e}")
+
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.descripcion} ({self.cod_articulo})"

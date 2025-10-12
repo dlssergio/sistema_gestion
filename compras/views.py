@@ -1,17 +1,13 @@
-# en compras/views.py (VERSIÓN FINAL CON LÓGICA DE STOCK)
-
 from django.db import transaction
 from rest_framework import viewsets, status
 from rest_framework.response import Response
+from django.http import JsonResponse
+from django.contrib.admin.views.decorators import staff_member_required
 
-# Importamos los modelos que necesitamos para la lógica
 from .models import ComprobanteCompra, ComprobanteCompraItem
-from inventario.models import StockArticulo
+from inventario.models import StockArticulo, Articulo
+from .serializers import ComprobanteCompraSerializer, ComprobanteCompraCreateSerializer
 
-from .serializers import (
-    ComprobanteCompraSerializer,
-    ComprobanteCompraCreateSerializer
-)
 
 class ComprobanteCompraViewSet(viewsets.ModelViewSet):
     queryset = ComprobanteCompra.objects.all().order_by('-fecha', '-numero')
@@ -21,7 +17,6 @@ class ComprobanteCompraViewSet(viewsets.ModelViewSet):
             return ComprobanteCompraCreateSerializer
         return ComprobanteCompraSerializer
 
-    # --- MÉTODO CREATE() ACTUALIZADO CON LÓGICA DE STOCK ---
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -29,17 +24,11 @@ class ComprobanteCompraViewSet(viewsets.ModelViewSet):
         try:
             with transaction.atomic():
                 items_data = serializer.validated_data.pop('items')
-
-                # 1. Creamos la cabecera
                 comprobante = ComprobanteCompra.objects.create(**serializer.validated_data)
 
-                # 2. Iteramos sobre los ítems y los creamos
                 for item_data in items_data:
-                    # Creamos el ComprobanteCompraItem
                     item_creado = ComprobanteCompraItem.objects.create(comprobante=comprobante, **item_data)
 
-                    # --- LÓGICA DE STOCK MOVIMIDA AQUÍ ---
-                    # Si el comprobante es finalizado y afecta stock...
                     if comprobante.estado == 'FN' and comprobante.tipo_comprobante.afecta_stock:
                         articulo = item_creado.articulo
                         if articulo.administra_stock and comprobante.deposito:
@@ -51,10 +40,8 @@ class ComprobanteCompraViewSet(viewsets.ModelViewSet):
                             stock_item.cantidad += item_creado.cantidad
                             stock_item.save()
 
-                        # Actualizamos el precio de costo del artículo
-                        articulo.precio_costo_original = item_creado.precio_costo_unitario_original
-                        articulo.moneda_costo = item_creado.moneda_costo
-                        articulo.save() # Esto recalcula precios de venta, etc.
+                        articulo.precio_costo = item_creado.precio_costo_unitario
+                        articulo.save()
 
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -62,3 +49,31 @@ class ComprobanteCompraViewSet(viewsets.ModelViewSet):
         read_serializer = ComprobanteCompraSerializer(comprobante)
         headers = self.get_success_headers(read_serializer.data)
         return Response(read_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+@staff_member_required
+def get_articulo_costo_json(request, articulo_pk):
+    """
+    Vista de API interna para el admin que devuelve el costo de un artículo,
+    respetando el sistema de Monedas personalizado.
+    """
+    try:
+        articulo = Articulo.objects.get(pk=articulo_pk)
+        costo = articulo.precio_costo
+
+        # --- CAMBIO CLAVE ---
+        # django-money crea un campo oculto ForeignKey a nuestro modelo Moneda
+        # cuando se configura correctamente. Obtenemos su ID.
+        moneda_id = None
+        if hasattr(articulo, 'precio_costo_currency_id') and articulo.precio_costo_currency_id:
+            moneda_id = articulo.precio_costo_currency_id
+
+        return JsonResponse({
+            'amount': f"{costo.amount:.2f}",
+            'currency_id': moneda_id  # <<< Enviamos el ID de tu modelo Moneda
+        })
+    except Articulo.DoesNotExist:
+        return JsonResponse({'error': 'Artículo no encontrado'}, status=404)
+    except Exception as e:
+        print(f"Error en get_articulo_costo_json: {e}")
+        return JsonResponse({'error': 'Error interno del servidor'}, status=500)

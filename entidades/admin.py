@@ -1,11 +1,14 @@
-# en entidades/admin.py (VERSIÓN FINAL CON INDENTACIÓN CORREGIDA)
 from django.contrib import admin
 from django.urls import reverse
 from django.utils.html import format_html
 from django.http import HttpResponseRedirect
+from django.shortcuts import redirect
+
 from .models import SituacionIVA, Entidad, EntidadDomicilio, EntidadTelefono, EntidadEmail
-from compras.admin import ProveedorInline
-from ventas.admin import ClienteInline
+
+# --- CAMBIO CLAVE: Importamos los MODELOS, no los inlines de otros admin ---
+from compras.models import Proveedor
+from ventas.models import Cliente
 
 
 @admin.register(SituacionIVA)
@@ -14,6 +17,7 @@ class SituacionIVAAdmin(admin.ModelAdmin):
     search_fields = ('codigo', 'nombre')
 
 
+# --- DEFINICIÓN DE INLINES ---
 class EntidadDomicilioInline(admin.TabularInline):
     model = EntidadDomicilio
     extra = 1
@@ -30,14 +34,25 @@ class EntidadEmailInline(admin.TabularInline):
     extra = 1
 
 
+# --- CAMBIO CLAVE: Definimos los Inlines de roles DENTRO de este archivo ---
+class ProveedorInline(admin.StackedInline):
+    model = Proveedor
+    can_delete = False
+    verbose_name_plural = 'Datos del Rol Proveedor'
+    fields = ('codigo_proveedor', 'nombre_fantasia', 'limite_credito')
+
+
+class ClienteInline(admin.StackedInline):
+    model = Cliente
+    can_delete = False
+    verbose_name_plural = 'Datos del Rol Cliente'
+    # Asumiendo que estos campos existen en tu modelo Cliente
+    # Si no existen, coméntalos o adáptalos a tu modelo.
+    # fields = ('limite_credito_cliente', 'lista_precios_cliente')
+
+
 @admin.register(Entidad)
 class EntidadAdmin(admin.ModelAdmin):
-    # Todo lo que está aquí adentro debe tener al menos 4 espacios de indentación
-    class Media:
-        # css = {'all': ('admin/css/tabs.css',)}
-        # js = ('admin/js/entidad_tabs.js', 'admin/js/entidad_form.js',)
-        pass  # Usamos 'pass' si la clase está vacía para evitar errores
-
     list_display = ('id', 'razon_social', 'get_nombre_fantasia', 'cuit', 'situacion_iva')
     list_display_links = ('id', 'razon_social')
     search_fields = ('razon_social', 'cuit', 'dni')
@@ -45,36 +60,22 @@ class EntidadAdmin(admin.ModelAdmin):
     fieldsets = (
         ('Datos Principales', {'fields': ('razon_social', 'sexo', 'dni', 'cuit', 'situacion_iva'), }),
     )
-    inlines = [
-        ClienteInline,
-        ProveedorInline,
-        EntidadDomicilioInline,
-        EntidadTelefonoInline,
-        EntidadEmailInline,
-    ]
 
-    def save_model(self, request, obj, form, change):
-        # Este método también está indentado para pertenecer a EntidadAdmin
-        from ventas.models import Cliente
-        from compras.models import Proveedor
-
-        super().save_model(request, obj, form, change)
-
-        if not change:
-            rol = request.GET.get('rol')
-            if rol == 'cliente':
-                Cliente.objects.create(entidad=obj)
-            elif rol == 'proveedor':
-                Proveedor.objects.create(entidad=obj)
+    base_inlines = [EntidadDomicilioInline, EntidadTelefonoInline, EntidadEmailInline]
 
     def get_inlines(self, request, obj=None):
+        inlines = list(self.base_inlines)
         rol = request.GET.get('rol')
-        if rol == 'cliente': return [ClienteInline, EntidadDomicilioInline, EntidadTelefonoInline, EntidadEmailInline]
-        if rol == 'proveedor': return [ProveedorInline, EntidadDomicilioInline, EntidadTelefonoInline,
-                                       EntidadEmailInline]
-        return self.inlines
+
+        if rol == 'proveedor' or (obj and hasattr(obj, 'proveedor')):
+            inlines.insert(0, ProveedorInline)
+        if rol == 'cliente' or (obj and hasattr(obj, 'cliente')):
+            inlines.insert(0, ClienteInline)
+
+        return inlines
 
     def add_view(self, request, form_url='', extra_context=None):
+        self.inlines = self.get_inlines(request)
         rol = request.GET.get('rol')
         extra_context = extra_context or {}
         if rol == 'cliente':
@@ -83,9 +84,23 @@ class EntidadAdmin(admin.ModelAdmin):
             extra_context['title'] = 'Agregar Nuevo Proveedor'
         return super().add_view(request, form_url, extra_context=extra_context)
 
+    def change_view(self, request, object_id, form_url='', extra_context=None):
+        obj = self.get_object(request, object_id)
+        self.inlines = self.get_inlines(request, obj)
+        return super().change_view(request, object_id, form_url, extra_context=extra_context)
+
     def get_nombre_fantasia(self, obj):
         if hasattr(obj, 'proveedor') and obj.proveedor.nombre_fantasia:
             return obj.proveedor.nombre_fantasia
         return '-'
 
     get_nombre_fantasia.short_description = 'Nombre de Fantasía'
+
+    def response_add(self, request, obj, post_url_continue=None):
+        if "_continue" not in request.POST:
+            rol = request.GET.get('rol')
+            if rol == 'proveedor':
+                return redirect('admin:compras_proveedor_changelist')
+            elif rol == 'cliente':
+                return redirect('admin:ventas_cliente_changelist')
+        return super().response_add(request, obj, post_url_continue)

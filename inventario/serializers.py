@@ -1,8 +1,9 @@
-# en inventario/serializers.py (VERSIÓN FINAL CON ESCRITURA)
+# en inventario/serializers.py (VERSIÓN FINAL CON ID DE MONEDA EN API)
 
 from rest_framework import serializers
+from djmoney.contrib.django_rest_framework import MoneyField
 from .models import Articulo, Marca, Rubro
-from parametros.models import Impuesto, Moneda
+from parametros.models import Impuesto
 
 class MarcaSerializer(serializers.ModelSerializer):
     class Meta:
@@ -14,44 +15,48 @@ class RubroSerializer(serializers.ModelSerializer):
         model = Rubro
         fields = '__all__'
 
-# --- NUEVO: SERIALIZER DE ESCRITURA PARA ARTICULO ---
 class ArticuloCreateUpdateSerializer(serializers.ModelSerializer):
-    # Para la escritura, le decimos a DRF que espere los IDs de las relaciones
     marca = serializers.PrimaryKeyRelatedField(queryset=Marca.objects.all(), required=False, allow_null=True)
     rubro = serializers.PrimaryKeyRelatedField(queryset=Rubro.objects.all())
     impuesto = serializers.PrimaryKeyRelatedField(queryset=Impuesto.objects.all())
-    moneda_costo = serializers.PrimaryKeyRelatedField(queryset=Moneda.objects.all())
-    moneda_venta = serializers.PrimaryKeyRelatedField(queryset=Moneda.objects.all())
 
     class Meta:
         model = Articulo
-        # Incluimos todos los campos que el usuario puede enviar desde el formulario
         fields = [
             'cod_articulo', 'descripcion', 'ean', 'marca', 'rubro', 'impuesto',
-            'moneda_costo', 'precio_costo_original', 'utilidad',
-            'moneda_venta', 'precio_venta_original',
+            'precio_costo', 'precio_venta',
             'administra_stock', 'esta_activo',
-            # No incluimos campos de solo lectura como 'stock_total'
         ]
 
-
-# --- SERIALIZER DE LECTURA (EL QUE YA TENÍAMOS, AJUSTADO) ---
 class ArticuloSerializer(serializers.ModelSerializer):
-    # Para Marca y Rubro, seguimos mostrando el objeto completo (útil para la lista)
     marca = MarcaSerializer(read_only=True)
     rubro = RubroSerializer(read_only=True)
 
+    precio_costo = serializers.SerializerMethodField()
+    precio_venta = MoneyField(max_digits=12, decimal_places=2, read_only=True)
+    precio_final_calculado = serializers.SerializerMethodField()
     stock_total = serializers.DecimalField(max_digits=12, decimal_places=3, read_only=True)
-    precio_final_calculado = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    utilidad = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
 
     class Meta:
         model = Articulo
-        # AÑADIMOS los campos que faltaban: impuesto y moneda_venta
         fields = [
             'cod_articulo', 'descripcion', 'ean', 'marca', 'rubro',
-            'stock_total', 'precio_venta_base', 'precio_costo_base',
-            'precio_costo_original', 'precio_venta_original', 'utilidad',
-            'moneda_costo', 'moneda_venta', 'impuesto',
-            'precio_final_calculado',
-            'administra_stock', 'esta_activo'
+            'stock_total', 'precio_costo', 'precio_venta', 'utilidad',
+            'impuesto', 'precio_final_calculado', 'administra_stock', 'esta_activo'
         ]
+
+    # <<< CAMBIO CLAVE: Ahora incluimos el ID de la moneda en la respuesta de la API >>>
+    def get_precio_costo(self, obj):
+        costo = obj.precio_costo
+        if costo:
+            # Buscamos el ID de la moneda a partir de su código
+            moneda_id = obj.precio_costo_currency.id
+            return {'amount': f"{costo.amount:.2f}", 'currency': costo.currency.code, 'currency_id': moneda_id}
+        return None
+
+    def get_precio_final_calculado(self, obj):
+        precio = obj.precio_final_calculado
+        if precio:
+            return {'amount': f"{precio.amount:.2f}", 'currency': precio.currency.code}
+        return None
