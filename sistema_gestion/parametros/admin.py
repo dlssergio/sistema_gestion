@@ -1,6 +1,7 @@
 # en parametros/admin.py (Versión Corregida)
 from django.contrib import admin
 from .models import TipoComprobante, Contador, Pais, Provincia, Localidad, Moneda, Impuesto
+from .models import Role
 
 # Solo hay UNA definición para TipoComprobanteAdmin
 @admin.register(TipoComprobante)
@@ -37,3 +38,8 @@ class LocalidadAdmin(admin.ModelAdmin):
     search_fields = ('nombre', 'codigo_postal')
     list_filter = ('provincia__pais', 'provincia')
     autocomplete_fields = ['provincia']
+
+@admin.register(Role)
+class RoleAdmin(admin.ModelAdmin):
+    list_display = ('name',)
+    filter_horizontal = ('permissions', 'users',)

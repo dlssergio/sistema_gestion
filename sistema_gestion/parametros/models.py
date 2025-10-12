@@ -1,5 +1,7 @@
-from django.db import models
+# parametros/models.py
 
+from django.db import models
+from django.contrib.auth.models import Permission, User
 
 
 class TipoComprobante(models.Model):
@@ -29,9 +31,7 @@ class Moneda(models.Model):
     def __str__(self): return self.nombre
 
     def save(self, *args, **kwargs):
-        # Si esta moneda se marca como base, nos aseguramos de que ninguna otra lo sea.
         if self.es_base:
-            # CORRECCIÓN: Usamos 'es_base' en lugar de 'por_defecto'
             Moneda.objects.filter(es_base=True).exclude(pk=self.pk).update(es_base=False)
         super().save(*args, **kwargs)
     class Meta:
@@ -77,7 +77,34 @@ class Impuesto(models.Model):
     descripcion = models.CharField(max_length=100, verbose_name="Descripción")
     tasa = models.DecimalField(max_digits=5, decimal_places=2, help_text="Porcentaje. Ej: 21.00 para 21%",
                                verbose_name="Tasa")
-
     def __str__(self): return f"{self.descripcion} ({self.tasa}%)"
-
     class Meta: verbose_name, verbose_name_plural = "Impuesto", "Impuestos"
+
+
+class Role(models.Model):
+    """
+    Define un rol dentro de la organización, como 'Vendedor' o 'Gerente'.
+    """
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="Nombre del rol, ej: Vendedor, Gerente de Compras"
+    )
+    permissions = models.ManyToManyField(
+        Permission,
+        blank=True,
+        help_text="Permisos generales de Django asignados a este rol."
+    )
+    users = models.ManyToManyField(
+        User,
+        blank=True,
+        related_name='roles',
+        help_text="Usuarios que tienen este rol."
+    )
+
+    class Meta:
+        verbose_name = "Rol"
+        verbose_name_plural = "Roles"
+
+    def __str__(self):
+        return self.name

@@ -25,33 +25,48 @@ SECRET_KEY = 'django-insecure-qzd#z@y1589onllqoyk7516y@05%ec@xpo%3w*3b2cey^7+l98
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+# <<< CAMBIO >>> Preparado para Multi-Tenancy en desarrollo
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '.localhost']
 
 
 # Application definition
 
-INSTALLED_APPS = [
+# <<< AÑADIDO >>> Estructura de Apps para Multi-Tenancy
+SHARED_APPS = [
+    'django_tenants',  # Debe ser la primera
+    'companies',       # Nuestra nueva app para gestionar los tenants (clientes)
+
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'rest_framework_simplejwt',
 
-    # Apps de terceros
+    # Apps de terceros que son compartidas
     'rest_framework',
+    'rest_framework_simplejwt',
     'corsheaders',
+]
 
-    # Mis Apps
+TENANT_APPS = [
+    'djmoney',
     'inventario',
     'compras',
     'entidades',
     'parametros',
     'ventas',
+    'guardian',
 ]
 
+# <<< CAMBIO >>> INSTALLED_APPS ahora se construye a partir de las listas anteriores
+INSTALLED_APPS = SHARED_APPS + TENANT_APPS
+
+
 MIDDLEWARE = [
+    # <<< AÑADIDO >>> El middleware de tenants debe ser el primero
+    'django_tenants.middleware.main.TenantMainMiddleware',
+
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
@@ -85,24 +100,15 @@ WSGI_APPLICATION = 'erp_project.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-'''
-# Default
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
-}
-'''
-
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql', # Le decimos a Django que use el adaptador de PostgreSQL
-        'NAME': 'erp_db',                         # El nombre de la base de datos que creamos en el Paso 1
-        'USER': 'postgres',                       # El usuario de PostgreSQL (por defecto es 'postgres')
-        'PASSWORD': 'ASDqwe123',                  # ¡IMPORTANTE! Reemplaza esto con la contraseña que creaste
-        'HOST': 'localhost',                      # La base de datos está en nuestra propia máquina
-        'PORT': '5432',                           # El puerto por defecto de PostgreSQL
+        # <<< CAMBIO >>> Usamos el motor de base de datos de django-tenants
+        'ENGINE': 'django_tenants.postgresql_backend',
+        'NAME': 'erp_db',
+        'USER': 'postgres',
+        'PASSWORD': 'ASDqwe123',
+        'HOST': 'localhost',
+        'PORT': '5432',
     }
 }
 
@@ -127,7 +133,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 
 # Internationalization
-# https://docs.djangoproject.com/en/5.2/topics/i18n/
+# https://docs.djangoproject.com/en/5.2/topics/i1n/
 
 LANGUAGE_CODE = 'es-ar'
 
@@ -154,14 +160,16 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # --- Configuración de CORS ---
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",  # La URL de tu frontend Vue.js
-    "http://127.0.0.1:5173", # A veces el navegador usa esta en lugar de localhost
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+# <<< AÑADIDO >>> Permitir CORS para los subdominios de los tenants
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://\w+\.localhost:5173$",
 ]
 
-# en settings.py
 
-# ... (al final del archivo)
-
+# --- Configuración de DRF ---
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -170,3 +178,14 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     )
 }
+
+# <<< AÑADIDO >>> Configuración específica para django-tenants
+DATABASE_ROUTERS = ('django_tenants.routers.TenantSyncRouter',)
+TENANT_MODEL = "companies.Company"
+TENANT_DOMAIN_MODEL = "companies.Domain"
+
+AUTHENTICATION_BACKENDS = (
+    'django.contrib.auth.backends.ModelBackend',
+    'guardian.backends.ObjectPermissionBackend',
+)
+
