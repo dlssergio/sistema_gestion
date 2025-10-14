@@ -1,8 +1,8 @@
-# en parametros/views.py
-
 from rest_framework import viewsets
-from .models import Moneda, TipoComprobante, Impuesto
-from .serializers import MonedaSerializer, TipoComprobanteSerializer, ImpuestoSerializer
+# <<< CAMBIO CLAVE: Eliminamos 'Impuesto' y añadimos 'ReglaImpuesto' >>>
+from .models import Moneda, TipoComprobante, ReglaImpuesto
+# <<< CAMBIO CLAVE: Eliminamos 'ImpuestoSerializer' y añadimos 'ReglaImpuestoSerializer' >>>
+from .serializers import MonedaSerializer, TipoComprobanteSerializer, ReglaImpuestoSerializer
 
 class MonedaViewSet(viewsets.ReadOnlyModelViewSet):
     """
@@ -18,9 +18,18 @@ class TipoComprobanteViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = TipoComprobante.objects.all()
     serializer_class = TipoComprobanteSerializer
 
-class ImpuestoViewSet(viewsets.ModelViewSet):
+# <<< CAMBIO CLAVE: Eliminamos el ImpuestoViewSet obsoleto >>>
+# class ImpuestoViewSet(viewsets.ModelViewSet):
+#     """
+#     API endpoint que permite ver y gestionar Impuestos.
+#     """
+#     queryset = Impuesto.objects.all()
+#     serializer_class = ImpuestoSerializer
+
+# <<< AÑADIMOS EL NUEVO VIEWSET PARA REGLAS DE IMPUESTO >>>
+class ReglaImpuestoViewSet(viewsets.ModelViewSet):
     """
-    API endpoint que permite ver y gestionar Impuestos.
+    API endpoint que permite ver y gestionar las Reglas de Impuesto.
     """
-    queryset = Impuesto.objects.all()
-    serializer_class = ImpuestoSerializer
+    queryset = ReglaImpuesto.objects.all()
+    serializer_class = ReglaImpuestoSerializer

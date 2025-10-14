@@ -1,9 +1,7 @@
-# en parametros/admin.py (Versión Corregida)
 from django.contrib import admin
-from .models import TipoComprobante, Contador, Pais, Provincia, Localidad, Moneda, Impuesto
+from .models import TipoComprobante, Contador, Pais, Provincia, Localidad, Moneda, ReglaImpuesto
 from .models import Role
 
-# Solo hay UNA definición para TipoComprobanteAdmin
 @admin.register(TipoComprobante)
 class TipoComprobanteAdmin(admin.ModelAdmin):
     list_display = ('nombre', 'letra', 'afecta_stock')
@@ -17,8 +15,6 @@ class ContadorAdmin(admin.ModelAdmin):
 class MonedaAdmin(admin.ModelAdmin):
     list_display = ('nombre', 'simbolo', 'cotizacion', 'es_base')
     list_editable = ('cotizacion',)
-
-admin.site.register(Impuesto)
 
 @admin.register(Pais)
 class PaisAdmin(admin.ModelAdmin):
@@ -43,3 +39,21 @@ class LocalidadAdmin(admin.ModelAdmin):
 class RoleAdmin(admin.ModelAdmin):
     list_display = ('name',)
     filter_horizontal = ('permissions', 'users',)
+
+@admin.register(ReglaImpuesto)
+class ReglaImpuestoAdmin(admin.ModelAdmin):
+    list_display = ('nombre', 'tasa', 'aplica_a', 'activo', 'valido_desde', 'valido_hasta')
+    list_filter = ('aplica_a', 'activo')
+    search_fields = ('nombre',)
+    filter_horizontal = ('categorias_producto',)
+    fieldsets = (
+        (None, {
+            'fields': ('nombre', 'tasa', 'tipo_impuesto', 'aplica_a', 'activo')
+        }),
+        ('Condiciones de Aplicación', {
+            'fields': ('categorias_producto',)
+        }),
+        ('Vigencia', {
+            'fields': ('valido_desde', 'valido_hasta')
+        }),
+    )

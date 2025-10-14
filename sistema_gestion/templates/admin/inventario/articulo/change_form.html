@@ -1,0 +1,11 @@
+{% extends "admin/change_form.html" %}
+{% load i18n admin_urls static %}
+
+{% block content %}
+    {# Renderiza el formulario principal como lo hace Django normalmente #}
+    {{ block.super }}
+
+    {# Inyectamos los datos para el JavaScript en divs ocultos #}
+    <div id="cotizaciones-json" style="display: none;">{{ cotizaciones_json|safe }}</div>
+    <div id="tasas-impuestos-json" style="display: none;">{{ tasas_impuestos_json|safe }}</div>
+{% endblock %}

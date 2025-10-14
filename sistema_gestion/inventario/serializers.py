@@ -1,9 +1,7 @@
-# en inventario/serializers.py (VERSIÓN FINAL CON ID DE MONEDA EN API)
-
 from rest_framework import serializers
 from djmoney.contrib.django_rest_framework import MoneyField
 from .models import Articulo, Marca, Rubro
-from parametros.models import Impuesto
+# <<< CAMBIO CLAVE: Eliminamos la importación de 'Impuesto' >>>
 
 class MarcaSerializer(serializers.ModelSerializer):
     class Meta:
@@ -18,12 +16,14 @@ class RubroSerializer(serializers.ModelSerializer):
 class ArticuloCreateUpdateSerializer(serializers.ModelSerializer):
     marca = serializers.PrimaryKeyRelatedField(queryset=Marca.objects.all(), required=False, allow_null=True)
     rubro = serializers.PrimaryKeyRelatedField(queryset=Rubro.objects.all())
-    impuesto = serializers.PrimaryKeyRelatedField(queryset=Impuesto.objects.all())
+    # <<< CAMBIO CLAVE: Eliminamos el campo 'impuesto' de este serializer >>>
+    # impuesto = serializers.PrimaryKeyRelatedField(queryset=Impuesto.objects.all())
 
     class Meta:
         model = Articulo
+        # <<< CAMBIO CLAVE: Eliminamos 'impuesto' de la lista de campos >>>
         fields = [
-            'cod_articulo', 'descripcion', 'ean', 'marca', 'rubro', 'impuesto',
+            'cod_articulo', 'descripcion', 'ean', 'marca', 'rubro',
             'precio_costo', 'precio_venta',
             'administra_stock', 'esta_activo',
         ]
@@ -40,23 +40,21 @@ class ArticuloSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Articulo
+        # <<< CAMBIO CLAVE: Eliminamos 'impuesto' de la lista de campos >>>
         fields = [
             'cod_articulo', 'descripcion', 'ean', 'marca', 'rubro',
             'stock_total', 'precio_costo', 'precio_venta', 'utilidad',
-            'impuesto', 'precio_final_calculado', 'administra_stock', 'esta_activo'
+            'precio_final_calculado', 'administra_stock', 'esta_activo'
         ]
 
-    # <<< CAMBIO CLAVE: Ahora incluimos el ID de la moneda en la respuesta de la API >>>
     def get_precio_costo(self, obj):
         costo = obj.precio_costo
-        if costo:
-            # Buscamos el ID de la moneda a partir de su código
+        if costo and hasattr(obj, 'precio_costo_currency') and obj.precio_costo_currency:
             moneda_id = obj.precio_costo_currency.id
             return {'amount': f"{costo.amount:.2f}", 'currency': costo.currency.code, 'currency_id': moneda_id}
         return None
 
     def get_precio_final_calculado(self, obj):
-        precio = obj.precio_final_calculado
-        if precio:
-            return {'amount': f"{precio.amount:.2f}", 'currency': precio.currency.code}
+        # <<< CAMBIO CLAVE: Deshabilitamos temporalmente este cálculo >>>
+        # La nueva lógica de impuestos se implementará aquí en el futuro.
         return None

@@ -1,4 +1,3 @@
-// en static/admin/js/entidad_form.js (Versión Corregida)
 window.addEventListener('DOMContentLoaded', (event) => {
     const sexoSelect = document.querySelector('#id_sexo');
     const dniInput = document.querySelector('#id_dni');
@@ -21,26 +20,18 @@ window.addEventListener('DOMContentLoaded', (event) => {
     function generarYActualizarCUIL() {
         const dni = dniInput.value;
         const sexo = sexoSelect.value;
-        if ((sexo === 'M' || sexo === 'F') && dni.length === 8) {
+        if ((sexo === 'M' || sexo === 'F') && dni.length >= 7) {
+            let dniPadded = dni.padStart(8, '0');
             let prefijo = (sexo === 'M') ? '20' : '27';
-            let digito = calcularDigitoVerificador(prefijo + dni);
+            let digito = calcularDigitoVerificador(prefijo + dniPadded);
             if (digito === 10) {
                 prefijo = '23';
-                digito = calcularDigitoVerificador(prefijo + dni);
+                digito = calcularDigitoVerificador(prefijo + dniPadded);
             }
-            cuitInput.value = `${prefijo}${dni}${digito}`;
-        }
-    }
-
-    function extraerDNIdeCUIL() {
-        const cuit = cuitInput.value.replace(/-/g, '');
-        const prefijo = cuit.substring(0, 2);
-        if (cuit.length === 11 && ['20', '23', '27'].includes(prefijo)) {
-            dniInput.value = cuit.substring(2, 10);
+            cuitInput.value = `${prefijo}${dniPadded}${digito}`;
         }
     }
 
     dniInput.addEventListener('input', generarYActualizarCUIL);
     sexoSelect.addEventListener('change', generarYActualizarCUIL);
-    cuitInput.addEventListener('input', extraerDNIdeCUIL);
 });
