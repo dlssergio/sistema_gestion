@@ -5,8 +5,6 @@ from django.http import HttpResponseRedirect
 from django.shortcuts import redirect
 
 from .models import SituacionIVA, Entidad, EntidadDomicilio, EntidadTelefono, EntidadEmail
-
-# --- CAMBIO CLAVE: Importamos los MODELOS, no los inlines de otros admin ---
 from compras.models import Proveedor
 from ventas.models import Cliente
 
@@ -17,7 +15,6 @@ class SituacionIVAAdmin(admin.ModelAdmin):
     search_fields = ('codigo', 'nombre')
 
 
-# --- DEFINICIÓN DE INLINES ---
 class EntidadDomicilioInline(admin.TabularInline):
     model = EntidadDomicilio
     extra = 1
@@ -34,7 +31,6 @@ class EntidadEmailInline(admin.TabularInline):
     extra = 1
 
 
-# --- CAMBIO CLAVE: Definimos los Inlines de roles DENTRO de este archivo ---
 class ProveedorInline(admin.StackedInline):
     model = Proveedor
     can_delete = False
@@ -46,32 +42,31 @@ class ClienteInline(admin.StackedInline):
     model = Cliente
     can_delete = False
     verbose_name_plural = 'Datos del Rol Cliente'
-    # Asumiendo que estos campos existen en tu modelo Cliente
-    # Si no existen, coméntalos o adáptalos a tu modelo.
-    # fields = ('limite_credito_cliente', 'lista_precios_cliente')
 
 
 @admin.register(Entidad)
 class EntidadAdmin(admin.ModelAdmin):
-    list_display = ('id', 'razon_social', 'get_nombre_fantasia', 'cuit', 'situacion_iva')
-    list_display_links = ('id', 'razon_social')
+    # <<< CAMBIO CLAVE: Eliminamos la referencia a la plantilla personalizada >>>
+    # change_form_template = "admin/entidades/entidad/change_form.html"
+
+    list_display = ('id', 'razon_social', 'cuit', 'situacion_iva')
     search_fields = ('razon_social', 'cuit', 'dni')
     autocomplete_fields = ['situacion_iva']
     fieldsets = (
-        ('Datos Principales', {'fields': ('razon_social', 'sexo', 'dni', 'cuit', 'situacion_iva'), }),
+        (None, {'fields': ('razon_social', 'sexo', 'dni', 'cuit', 'situacion_iva')}),
     )
 
     base_inlines = [EntidadDomicilioInline, EntidadTelefonoInline, EntidadEmailInline]
 
+    # <<< CAMBIO CLAVE: Modificamos la clase Media para cargar SOLO el script del CUIL >>>
+    class Media:
+        js = ('admin/js/entidad_form.js',)
+
     def get_inlines(self, request, obj=None):
         inlines = list(self.base_inlines)
         rol = request.GET.get('rol')
-
-        if rol == 'proveedor' or (obj and hasattr(obj, 'proveedor')):
-            inlines.insert(0, ProveedorInline)
-        if rol == 'cliente' or (obj and hasattr(obj, 'cliente')):
-            inlines.insert(0, ClienteInline)
-
+        if rol == 'proveedor' or (obj and hasattr(obj, 'proveedor')): inlines.insert(0, ProveedorInline)
+        if rol == 'cliente' or (obj and hasattr(obj, 'cliente')): inlines.insert(0, ClienteInline)
         return inlines
 
     def add_view(self, request, form_url='', extra_context=None):
@@ -89,12 +84,15 @@ class EntidadAdmin(admin.ModelAdmin):
         self.inlines = self.get_inlines(request, obj)
         return super().change_view(request, object_id, form_url, extra_context=extra_context)
 
-    def get_nombre_fantasia(self, obj):
-        if hasattr(obj, 'proveedor') and obj.proveedor.nombre_fantasia:
-            return obj.proveedor.nombre_fantasia
-        return '-'
-
-    get_nombre_fantasia.short_description = 'Nombre de Fantasía'
+    # <<< CORRECCIÓN DE LÓGICA: El método 'save_model' se asegura de crear el rol >>>
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        if not change:
+            rol = request.GET.get('rol')
+            if rol == 'cliente':
+                Cliente.objects.create(entidad=obj)
+            elif rol == 'proveedor':
+                Proveedor.objects.create(entidad=obj)
 
     def response_add(self, request, obj, post_url_continue=None):
         if "_continue" not in request.POST:

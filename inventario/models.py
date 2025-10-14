@@ -1,22 +1,20 @@
-# en inventario/models.py (VERSIÓN FINAL CON LÓGICA SAVE() CORREGIDA Y ROBUSTA)
+# inventario/models.py
 
 from django.db import models, transaction
-from django.db.models import Sum
+from django.db.models import Sum, Q
 from decimal import Decimal
-from parametros.models import Contador, Impuesto, Moneda
 from djmoney.models.fields import MoneyField
 from djmoney.money import Money
+from parametros.models import Contador, Moneda, UnidadMedida, get_default_unidad_medida, ReglaImpuesto
+from django.core.exceptions import ObjectDoesNotExist
 
 
-# ... (Clases Marca, Rubro, Deposito, StockArticulo sin cambios) ...
 class Marca(models.Model):
     nombre = models.CharField(max_length=100, unique=True, verbose_name="Nombre")
 
     def __str__(self): return self.nombre
 
-    class Meta:
-        verbose_name = "Marca"
-        verbose_name_plural = "Marcas"
+    class Meta: verbose_name = "Marca"; verbose_name_plural = "Marcas"
 
 
 class Rubro(models.Model):
@@ -24,22 +22,17 @@ class Rubro(models.Model):
 
     def __str__(self): return self.nombre
 
-    class Meta:
-        verbose_name = "Rubro"
-        verbose_name_plural = "Rubros"
+    class Meta: verbose_name = "Rubro"; verbose_name_plural = "Rubros"
 
 
 class Deposito(models.Model):
     nombre = models.CharField(max_length=100, unique=True)
     direccion = models.CharField(max_length=255, blank=True, null=True)
-    es_principal = models.BooleanField(default=False,
-                                       help_text="Marcar si este es el depósito principal o por defecto.")
+    es_principal = models.BooleanField(default=False, help_text="Marcar si este es el depósito principal.")
 
     def __str__(self): return self.nombre
 
-    class Meta:
-        verbose_name = "Depósito"
-        verbose_name_plural = "Depósitos"
+    class Meta: verbose_name = "Depósito"; verbose_name_plural = "Depósitos"
 
 
 class StockArticulo(models.Model):
@@ -51,17 +44,11 @@ class StockArticulo(models.Model):
 
     class Meta:
         unique_together = ('articulo', 'deposito')
-        verbose_name = "Stock por Depósito"
+        verbose_name = "Stock por Depósito";
         verbose_name_plural = "Stocks por Depósito"
 
 
 class Articulo(models.Model):
-    class UnidadMedida(models.TextChoices):
-        UNIDADES = 'UN', 'Unidades'
-        KILOGRAMO = 'KG', 'Kilogramo'
-        LITRO = 'LT', 'Litro'
-        METRO = 'MT', 'Metro'
-
     class Perfil(models.TextChoices):
         COMPRA_VENTA = 'CV', 'Compra/Venta'
         COMPRA = 'CO', 'Compra'
@@ -69,38 +56,40 @@ class Articulo(models.Model):
 
     cod_articulo = models.CharField(max_length=50, unique=True, primary_key=True, blank=True,
                                     verbose_name="Código de Artículo",
-                                    help_text="Dejar en blanco para generar un código automático.")
-    ean = models.CharField(max_length=13, blank=True, null=True, db_index=True, verbose_name="Código de Barras (EAN)")
-    qr_code = models.CharField(max_length=255, blank=True, null=True, verbose_name="Código QR")
+                                    help_text="Dejar en blanco para generar código automático.")
     descripcion = models.CharField(max_length=255, verbose_name="Descripción")
     perfil = models.CharField(max_length=2, choices=Perfil.choices, default=Perfil.COMPRA_VENTA,
                               verbose_name="Perfil del Artículo")
     marca = models.ForeignKey(Marca, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="Marca")
     rubro = models.ForeignKey(Rubro, on_delete=models.PROTECT, verbose_name="Rubro")
-    unidad_medida = models.CharField(max_length=2, choices=UnidadMedida.choices, default=UnidadMedida.UNIDADES,
-                                     verbose_name="Unidad de Medida")
-
+    unidad_medida_stock = models.ForeignKey(UnidadMedida, on_delete=models.PROTECT, default=get_default_unidad_medida,
+                                            verbose_name="Unidad de Medida de Stock",
+                                            help_text="La unidad en la que se controla el inventario (la más pequeña).")
     precio_costo = MoneyField(max_digits=12, decimal_places=2, default_currency='ARS', default=0,
                               verbose_name="Precio de Costo")
-    utilidad = models.DecimalField(max_digits=5, decimal_places=2, default=30.00,
-                                   help_text="Porcentaje de ganancia sobre el costo. Modificar este campo recalculará el Precio de Venta.",
-                                   verbose_name="Utilidad (%)")
+    utilidad = models.DecimalField(max_digits=5, decimal_places=2, default=0.00,
+                                   help_text="Porcentaje de ganancia sobre el costo.", verbose_name="Utilidad (%)")
     precio_venta = MoneyField(max_digits=12, decimal_places=2, default_currency='ARS', default=0,
                               verbose_name="Precio de Venta")
-    impuesto = models.ForeignKey(Impuesto, on_delete=models.PROTECT, verbose_name="Impuesto (IVA)")
+    impuesto = models.ForeignKey(ReglaImpuesto, on_delete=models.PROTECT, verbose_name="Regla Impositiva",
+                                 help_text="El impuesto principal que se aplica al precio de venta.", null=True,
+                                 blank=True)
+
+    proveedores = models.ManyToManyField('compras.Proveedor', through='ProveedorArticulo',
+                                         related_name='articulos_directos', blank=True,
+                                         verbose_name="Proveedores Relacionados")
+
     administra_stock = models.BooleanField(default=True, verbose_name="¿Administra Stock?")
-    stock_minimo = models.DecimalField(max_digits=12, decimal_places=3, default=0, verbose_name="Stock Mínimo")
-    stock_maximo = models.DecimalField(max_digits=12, decimal_places=3, default=0, verbose_name="Stock Máximo")
-    punto_pedido = models.DecimalField(max_digits=12, decimal_places=3, default=0, verbose_name="Punto de Pedido")
     esta_activo = models.BooleanField(default=True, verbose_name="¿Está Activo?")
     observaciones = models.TextField(blank=True, null=True, verbose_name="Observaciones")
     nota = models.TextField(blank=True, null=True, verbose_name="Nota Interna")
 
     @property
-    def precio_final_calculado(self):
-        if self.precio_venta and self.impuesto:
-            return self.precio_venta * (1 + (self.impuesto.tasa / Decimal(100)))
-        return Money(0, self.precio_venta.currency if self.precio_venta else 'ARS')
+    def proveedor_actualiza_precio(self):
+        try:
+            return self.proveedorarticulo_set.get(es_fuente_de_verdad=True).proveedor
+        except ObjectDoesNotExist:
+            return None
 
     @property
     def stock_total(self):
@@ -119,43 +108,56 @@ class Articulo(models.Model):
                     contador.save()
             except Contador.DoesNotExist:
                 pass
-
-        old_instance = Articulo.objects.filter(pk=self.pk).first()
-        is_new = old_instance is None
-
-        # Determinar qué campo cambió el usuario
-        utilidad_changed = not is_new and self.utilidad != old_instance.utilidad
-        costo_changed = not is_new and self.precio_costo != old_instance.precio_costo
-        venta_changed = not is_new and self.precio_venta != old_instance.precio_venta
-
-        try:
-            monedas = {m.simbolo: m.cotizacion for m in Moneda.objects.all()}
-            cotizacion_costo = monedas.get(str(self.precio_costo.currency), Decimal('1.0'))
-            cotizacion_venta = monedas.get(str(self.precio_venta.currency), Decimal('1.0'))
-
-            costo_en_base = self.precio_costo.amount * cotizacion_costo
-
-            # Prioridad 1: Si la utilidad o el costo cambian (o es nuevo), recalcular precio de venta.
-            if is_new or utilidad_changed or costo_changed:
-                venta_en_base = costo_en_base * (1 + (self.utilidad / Decimal(100)))
-                if cotizacion_venta > 0:
-                    self.precio_venta = Money(venta_en_base / cotizacion_venta, self.precio_venta.currency)
-
-            # Prioridad 2: Si el precio de venta cambió, recalcular la utilidad.
-            elif venta_changed:
-                if costo_en_base > 0:
-                    venta_en_base = self.precio_venta.amount * cotizacion_venta
-                    self.utilidad = ((venta_en_base / costo_en_base) - 1) * 100
-                else:
-                    self.utilidad = 0
-        except Exception as e:
-            print(f"ADVERTENCIA: No se pudieron realizar los cálculos de precios. Error: {e}")
-
+        if self.precio_costo.amount > 0 and self.utilidad is not None:
+            self.precio_venta = self.precio_costo * (1 + (self.utilidad / Decimal(100)))
         super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.descripcion} ({self.cod_articulo})"
 
     class Meta:
-        verbose_name = "Artículo"
+        verbose_name = "Artículo";
         verbose_name_plural = "Artículos"
+
+
+class ProveedorArticulo(models.Model):
+    proveedor = models.ForeignKey('compras.Proveedor', on_delete=models.CASCADE)
+    articulo = models.ForeignKey('Articulo', on_delete=models.CASCADE)
+    es_fuente_de_verdad = models.BooleanField(default=False, verbose_name="Fuente de Costo Base",
+                                              help_text="Marcar si este proveedor tiene autoridad para actualizar el precio_costo del artículo.")
+    fecha_relacion = models.DateField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if self.es_fuente_de_verdad:
+            ProveedorArticulo.objects.filter(articulo=self.articulo).exclude(pk=self.pk).update(
+                es_fuente_de_verdad=False)
+        super().save(*args, **kwargs)
+
+    class Meta:
+        unique_together = ('proveedor', 'articulo')
+        verbose_name = "Proveedor de Artículo";
+        verbose_name_plural = "Proveedores de Artículos"
+        constraints = [
+            models.UniqueConstraint(fields=['articulo'], condition=models.Q(es_fuente_de_verdad=True),
+                                    name='unique_fuente_de_verdad_por_articulo')
+        ]
+
+
+class ConversionUnidadMedida(models.Model):
+    articulo = models.ForeignKey(Articulo, on_delete=models.CASCADE, related_name="conversiones_uom")
+    unidad_externa = models.ForeignKey(UnidadMedida, on_delete=models.PROTECT, related_name="conversiones_externas",
+                                       default=get_default_unidad_medida,
+                                       help_text="Unidad a convertir (ej: Caja, Botella, Bulto)")
+    factor_conversion = models.DecimalField(max_digits=14, decimal_places=6,
+                                            help_text="¿Cuántas unidades de stock (la más pequeña) caben en la unidad externa? Ej: 1 Caja = 150 Unidades.")
+
+    class Meta:
+        unique_together = ('articulo', 'unidad_externa')
+        verbose_name = "Factor de Conversión de U.M.";
+        verbose_name_plural = "Factores de Conversión de U.M."
+
+    def __str__(self):
+        try:
+            return f"1 {self.unidad_externa.abreviatura} = {self.factor_conversion} {self.articulo.unidad_medida_stock.abreviatura}"
+        except:
+            return "Conversión de Unidad Inválida"

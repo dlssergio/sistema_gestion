@@ -47,6 +47,7 @@ SHARED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
+    'auditlog',
 ]
 
 TENANT_APPS = [
@@ -73,6 +74,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'auditlog.middleware.AuditlogMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -189,3 +191,12 @@ AUTHENTICATION_BACKENDS = (
     'guardian.backends.ObjectPermissionBackend',
 )
 
+# --- CELERY SETTINGS ---
+# Dirección del broker (Redis)
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+# Dónde se guardarán los resultados de las tareas
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE # Usamos la misma zona horaria que Django

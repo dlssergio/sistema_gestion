@@ -1,7 +1,6 @@
-# en parametros/serializers.py
-
 from rest_framework import serializers
-from .models import Moneda, TipoComprobante, Impuesto
+# <<< CAMBIO CLAVE: Eliminamos la importación de 'Impuesto' >>>
+from .models import Moneda, TipoComprobante, ReglaImpuesto
 
 class MonedaSerializer(serializers.ModelSerializer):
     class Meta:
@@ -15,7 +14,11 @@ class TipoComprobanteSerializer(serializers.ModelSerializer):
         # Exponemos todos los campos del modelo
         fields = '__all__'
 
-class ImpuestoSerializer(serializers.ModelSerializer):
+# <<< CAMBIO CLAVE: Eliminamos el ImpuestoSerializer por completo >>>
+# En su lugar, creamos un serializer para el nuevo modelo ReglaImpuesto
+# que usaremos en el futuro.
+
+class ReglaImpuestoSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Impuesto
+        model = ReglaImpuesto
         fields = '__all__'
