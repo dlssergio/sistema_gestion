@@ -1,4 +1,4 @@
-# compras/views.py
+# compras/views.py (VERSIÓN ACTUALIZADA PARA LA NUEVA ARQUITECTURA)
 
 import json
 from decimal import Decimal
@@ -10,33 +10,38 @@ from rest_framework import viewsets
 from django.shortcuts import get_object_or_404
 
 # --- Modelos ---
-# <<< CORRECCIÓN DEFINITIVA: Se importa el modelo correcto 'PrecioProveedorArticulo' de la arquitectura final >>>
-from .models import ComprobanteCompra, ComprobanteCompraItem, PrecioProveedorArticulo
+# <<< CORRECCIÓN: Ya no importamos 'PrecioProveedorArticulo' >>>
+from .models import ComprobanteCompra
 from inventario.models import Articulo
 from parametros.models import Moneda, TipoComprobante
 
 # --- Servicios ---
+# Importamos los servicios que contienen la lógica de negocio.
 from ventas.services import TaxCalculatorService
+# <<< ¡CRÍTICO! Aún no hemos creado el PriceListService, así que usaremos CostCalculatorService por ahora >>>
 from compras.services import CostCalculatorService
 
 
 class ComprobanteCompraViewSet(viewsets.ModelViewSet):
     # (Este ViewSet no se ve afectado por los cambios, se mantiene igual)
     queryset = ComprobanteCompra.objects.all().order_by('-fecha', '-numero')
-    # ... resto de la implementación ...
+    # ... el resto de tu implementación de ViewSet si la tienes ...
+    # serializer_class = ComprobanteCompraSerializer # Descomentar cuando lo creemos
 
 
 @staff_member_required
 def get_precio_proveedor_json(request, proveedor_pk, articulo_pk):
     """
     Busca el costo más relevante para un artículo de un proveedor específico.
-    Si no encuentra un precio, devuelve el costo base del artículo como fallback.
+    Esta es la VISTA CLAVE que utiliza la nueva lógica de precios.
     """
     try:
         articulo = get_object_or_404(Articulo, pk=articulo_pk)
         cantidad_a_comprar = Decimal(request.GET.get('cantidad', 1))
 
-        # 1. El servicio (ya corregido) busca en la arquitectura correcta de PrecioProveedorArticulo
+        # 1. Utilizamos el SERVICIO para obtener el precio (abstracción)
+        #    En el futuro, este servicio usará las nuevas listas de precios.
+        #    Por ahora, se mantiene compatible con el modelo viejo si existe.
         item_precio = CostCalculatorService.get_latest_price(
             proveedor_pk=proveedor_pk,
             articulo_pk=articulo_pk,
@@ -44,11 +49,11 @@ def get_precio_proveedor_json(request, proveedor_pk, articulo_pk):
         )
 
         if item_precio:
-            # 2. Si se encuentra un precio, se calcula su costo efectivo
+            # 2. Si se encuentra un precio, calculamos su costo efectivo
             costo_efectivo = CostCalculatorService.calculate_effective_cost(item_precio)
-            source_info = 'Precio de Proveedor'
+            source_info = 'Precio de Proveedor (Sistema Actual)'
         else:
-            # 3. Fallback: usar el costo base del artículo
+            # 3. Fallback: si no hay precio de proveedor, usamos el costo base del artículo
             costo_efectivo = articulo.precio_costo
             source_info = 'Costo Base del Artículo (Fallback)'
 
@@ -80,6 +85,7 @@ def calcular_totales_compra_api(request):
                 self.articulo = Articulo.objects.get(pk=data.get('articulo'))
                 self.cantidad = Decimal(data.get('cantidad', '0'))
                 monto = Decimal(data.get('precio_monto', '0'))
+                # Asumimos que el ID de la moneda viene en el payload
                 moneda_simbolo = Moneda.objects.get(pk=data.get('precio_moneda_id')).simbolo
                 self.precio_costo_unitario = Money(monto, moneda_simbolo)
 
@@ -110,27 +116,3 @@ def calcular_totales_compra_api(request):
         })
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=400)
-
-
-# <<< CORRECCIÓN: La vista ahora consulta el modelo correcto 'PrecioProveedorArticulo' >>>
-# Esta vista ya no es estrictamente necesaria si el inline del admin se maneja con JS, pero la dejamos corregida.
-@staff_member_required
-def get_costo_efectivo_proveedor_json(request, item_pk):
-    """
-    Devuelve el costo unitario efectivo de un PrecioProveedorArticulo.
-    """
-    try:
-        item = get_object_or_404(PrecioProveedorArticulo, pk=item_pk)
-        costo_efectivo = item.costo_unitario_efectivo
-
-        moneda_id = Moneda.objects.get(simbolo=costo_efectivo.currency.code).id
-
-        return JsonResponse({
-            'amount': f"{costo_efectivo.amount:.4f}",
-            'currency_code': costo_efectivo.currency.code,
-            'currency_id': moneda_id,
-        })
-    except Moneda.DoesNotExist:
-        return JsonResponse({'error': 'Error de configuración de moneda'}, status=500)
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)

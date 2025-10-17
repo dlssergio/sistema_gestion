@@ -1,16 +1,22 @@
+# ventas/views.py (VERSIÓN CON IMPORTACIÓN CORREGIDA)
+
 import json
 from decimal import Decimal
 from django.http import JsonResponse
 from django.db import transaction
 from django.views.decorators.http import require_POST
-# <<< CAMBIO CLAVE: AÑADIMOS LA IMPORTACIÓN QUE FALTABA >>>
 from django.contrib.admin.views.decorators import staff_member_required
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from django.core.exceptions import ValidationError
 
 from inventario.models import Articulo, StockArticulo
-from .models import ComprobanteVenta, ComprobanteVentaItem, TipoComprobante
+# --- INICIO DE LA CORRECCIÓN ---
+# Se importan los modelos que SÍ pertenecen a la app 'ventas'
+from .models import ComprobanteVenta, ComprobanteVentaItem
+# Se importa 'TipoComprobante' desde su ubicación correcta en la app 'parametros'
+from parametros.models import TipoComprobante
+# --- FIN DE LA CORRECCIÓN ---
 from .serializers import ComprobanteVentaSerializer, ComprobanteVentaCreateSerializer
 from .services import TaxCalculatorService
 

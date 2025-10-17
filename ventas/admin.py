@@ -1,7 +1,6 @@
-# al principio del archivo
-from auditlog.registry import auditlog
-from .models import ComprobanteVenta, Cliente
+# ventas/admin.py (VERSIÓN RESTAURADA Y FUNCIONAL)
 
+from auditlog.registry import auditlog
 from django.contrib import admin
 from django.urls import reverse, path
 from django.utils.html import format_html
@@ -9,49 +8,33 @@ from django.http import HttpResponseRedirect
 from decimal import Decimal
 
 from .models import Cliente, ComprobanteVenta, ComprobanteVentaItem
-# <<< CAMBIO CLAVE: AÑADIMOS LA IMPORTACIÓN QUE FALTABA >>>
 from .views import get_precio_articulo, calcular_totales_api
 from .services import TaxCalculatorService
-
-
-class ClienteInline(admin.StackedInline):
-    model = Cliente
-    can_delete = False
-    verbose_name_plural = 'Datos del Cliente'
-
 
 @admin.register(Cliente)
 class ClienteAdmin(admin.ModelAdmin):
     list_display = ('get_razon_social', 'get_cuit', 'editar_entidad_link')
     search_fields = ('entidad__razon_social', 'entidad__cuit')
-
     def get_razon_social(self, obj): return obj.entidad.razon_social
-
     get_razon_social.short_description = 'Razón Social'
-
     def get_cuit(self, obj): return obj.entidad.cuit
-
     get_cuit.short_description = 'CUIT'
-
     def editar_entidad_link(self, obj):
         url = reverse('admin:entidades_entidad_change', args=[obj.entidad.pk])
         return format_html('<a href="{}">Editar Ficha Completa</a>', url)
-
     editar_entidad_link.short_description = 'Acciones'
-
     def add_view(self, request, form_url='', extra_context=None):
         url = reverse('admin:entidades_entidad_add') + '?rol=cliente'
         return HttpResponseRedirect(url)
-
     def has_change_permission(self, request, obj=None): return False
-
 
 class ComprobanteVentaItemInline(admin.TabularInline):
     model = ComprobanteVentaItem
     extra = 1
+    # EXPLICACIÓN: Se restaura a `autocomplete_fields`, que es el estado que funcionaba.
     autocomplete_fields = ['articulo']
     readonly_fields = ('subtotal',)
-
+    raw_id_fields = []
 
 @admin.register(ComprobanteVenta)
 class ComprobanteVentaAdmin(admin.ModelAdmin):
@@ -60,16 +43,14 @@ class ComprobanteVentaAdmin(admin.ModelAdmin):
     list_filter = ('estado', 'cliente', 'fecha', 'tipo_comprobante')
     search_fields = ('numero', 'punto_venta')
     inlines = [ComprobanteVentaItemInline]
-
     readonly_fields = ('letra', 'subtotal', 'impuestos_desglosados', 'total')
-
+    autocomplete_fields = ['cliente']
     fieldsets = (
         (None, {'fields': ('tipo_comprobante', 'cliente', 'fecha', 'estado')}),
         ('Numeración', {'fields': (('punto_venta', 'numero'),)}),
         ('Totales (Calculado al Guardar)',
-         {'classes': ('collapse',), 'fields': ('subtotal', 'impuestos_desglosados', 'total')})
+         {'classes': ('collapse', 'show'), 'fields': ('subtotal', 'impuestos_desglosados', 'total')})
     )
-
     class Media:
         js = ('admin/js/comprobante_venta_admin.js',)
 
@@ -84,7 +65,6 @@ class ComprobanteVentaAdmin(admin.ModelAdmin):
                  name='ventas_calcular_totales_api'),
         ]
         return custom_urls + urls
-
     @admin.display(description='Impuestos')
     def impuestos_desglosados(self, obj):
         if not obj.impuestos: return "N/A"
@@ -97,14 +77,14 @@ class ComprobanteVentaAdmin(admin.ModelAdmin):
     def save_formset(self, request, form, formset, change):
         super().save_formset(request, form, formset, change)
         obj = form.instance
+        if not obj.pk: return
         subtotal_calculado = sum(item.subtotal for item in obj.items.all())
         obj.subtotal = subtotal_calculado.quantize(Decimal('0.01'))
-        desglose_impuestos = TaxCalculatorService.calcular_impuestos_comprobante(obj)
+        desglose_impuestos = TaxCalculatorService.calcular_impuestos_comprobante(obj, 'venta')
         obj.impuestos = {k: str(v) for k, v in desglose_impuestos.items()}
         total_impuestos = sum(desglose_impuestos.values())
         obj.total = obj.subtotal + total_impuestos
         obj.save()
 
-# al final del archivo
 auditlog.register(ComprobanteVenta)
 auditlog.register(Cliente)

@@ -1,4 +1,4 @@
-# inventario/models.py
+# inventario/models.py (VERSIÓN CON PROPIEDAD 'proveedor_actualiza_precio')
 
 from django.db import models, transaction
 from django.db.models import Sum, Q
@@ -11,17 +11,13 @@ from django.core.exceptions import ObjectDoesNotExist
 
 class Marca(models.Model):
     nombre = models.CharField(max_length=100, unique=True, verbose_name="Nombre")
-
     def __str__(self): return self.nombre
-
     class Meta: verbose_name = "Marca"; verbose_name_plural = "Marcas"
 
 
 class Rubro(models.Model):
     nombre = models.CharField(max_length=100, unique=True, verbose_name="Nombre")
-
     def __str__(self): return self.nombre
-
     class Meta: verbose_name = "Rubro"; verbose_name_plural = "Rubros"
 
 
@@ -29,9 +25,7 @@ class Deposito(models.Model):
     nombre = models.CharField(max_length=100, unique=True)
     direccion = models.CharField(max_length=255, blank=True, null=True)
     es_principal = models.BooleanField(default=False, help_text="Marcar si este es el depósito principal.")
-
     def __str__(self): return self.nombre
-
     class Meta: verbose_name = "Depósito"; verbose_name_plural = "Depósitos"
 
 
@@ -39,9 +33,7 @@ class StockArticulo(models.Model):
     articulo = models.ForeignKey('Articulo', on_delete=models.CASCADE, related_name="stocks")
     deposito = models.ForeignKey(Deposito, on_delete=models.CASCADE)
     cantidad = models.DecimalField(max_digits=12, decimal_places=3, default=0)
-
     def __str__(self): return f"{self.articulo.descripcion} en {self.deposito.nombre}: {self.cantidad}"
-
     class Meta:
         unique_together = ('articulo', 'deposito')
         verbose_name = "Stock por Depósito";
@@ -84,9 +76,11 @@ class Articulo(models.Model):
     observaciones = models.TextField(blank=True, null=True, verbose_name="Observaciones")
     nota = models.TextField(blank=True, null=True, verbose_name="Nota Interna")
 
+    # <<< PROPIEDAD REQUERIDA PARA LA LÓGICA DE ACTUALIZACIÓN DE COSTO >>>
     @property
     def proveedor_actualiza_precio(self):
         try:
+            # Busca en la tabla intermedia la entrada marcada como 'fuente de verdad'
             return self.proveedorarticulo_set.get(es_fuente_de_verdad=True).proveedor
         except ObjectDoesNotExist:
             return None
@@ -158,6 +152,6 @@ class ConversionUnidadMedida(models.Model):
 
     def __str__(self):
         try:
-            return f"1 {self.unidad_externa.abreviatura} = {self.factor_conversion} {self.articulo.unidad_medida_stock.abreviatura}"
+            return f"1 {self.unidad_externa.simbolo} = {self.factor_conversion} {self.articulo.unidad_medida_stock.simbolo}"
         except:
             return "Conversión de Unidad Inválida"
