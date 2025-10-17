@@ -1,3 +1,4 @@
+// static/admin/js/articulo_admin.js (VERSIÓN RESTAURADA Y FUNCIONAL)
 window.addEventListener('DOMContentLoaded', (event) => {
     const cotizacionesElement = document.getElementById('cotizaciones-json');
     const tasasImpuestosElement = document.getElementById('tasas-impuestos-json');
@@ -12,9 +13,16 @@ window.addEventListener('DOMContentLoaded', (event) => {
         utilidad: document.querySelector('#id_utilidad'),
         ventaMonto: document.querySelector('#id_precio_venta_0'),
         ventaMoneda: document.querySelector('#id_precio_venta_1'),
-        impuesto: document.querySelector('#id_impuesto'), // <<< NUEVO: El campo de selección de impuesto
+        impuesto: document.querySelector('#id_impuesto'),
         precioFinal: document.querySelector('.field-precio_final_form .readonly'),
     };
+
+    for (const key in campos) {
+        if (!campos[key]) {
+            console.error(`Faro ERP (Error): No se encontró el campo del formulario: ${key}`);
+            return;
+        }
+    }
 
     let lastModified = null;
 
@@ -29,7 +37,7 @@ window.addEventListener('DOMContentLoaded', (event) => {
         const ventaEnBase = costoEnBase * (1 + (utilidad / 100));
 
         if (cotizacionVenta > 0) {
-            campos.ventaMonto.value = (ventaEnBase / cotizacionVenta).toFixed(2);
+            campos.ventaMonto.value = (ventaEnBase / cotizacionVenta).toFixed(4);
         }
         actualizarPrecioFinal();
     }
@@ -65,19 +73,16 @@ window.addEventListener('DOMContentLoaded', (event) => {
             }
         }
 
-        // Asumiendo que el precio de venta es en ARS para el display final
         campos.precioFinal.textContent = `$${totalConImpuestos.toLocaleString('es-AR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     }
 
-    // Event Listeners
     campos.costoMonto.addEventListener('input', () => { lastModified = 'utilidad'; calcularVenta(); });
     campos.costoMoneda.addEventListener('change', () => { lastModified = 'utilidad'; calcularVenta(); });
     campos.utilidad.addEventListener('input', () => { lastModified = 'utilidad'; calcularVenta(); });
     campos.ventaMonto.addEventListener('input', () => { lastModified = 'venta'; calcularUtilidad(); });
     campos.ventaMoneda.addEventListener('change', () => { lastModified = 'utilidad'; calcularVenta(); });
-    campos.impuesto.addEventListener('change', actualizarPrecioFinal); // <<< NUEVO: Actualiza el precio final si cambia el impuesto
+    campos.impuesto.addEventListener('change', actualizarPrecioFinal);
 
-    // Inicialización
     if (campos.ventaMonto.value) {
         actualizarPrecioFinal();
     }
