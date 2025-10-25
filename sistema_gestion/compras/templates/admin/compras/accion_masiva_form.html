@@ -1,0 +1,28 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<div id="content-main">
+    <form method="post">
+        {% csrf_token %}
+        <h2>{{ title }}</h2>
+        <p>Se aplicará la siguiente acción a los {{ queryset.count }} ítem(s) de lista de precios seleccionados.</p>
+
+        <fieldset class="module aligned">
+            <div class="form-row">
+                {{ form.as_p }}
+            </div>
+        </fieldset>
+
+        <div>
+            {% for obj in queryset %}
+            <input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}">
+            {% endfor %}
+            <input type="hidden" name="action" value="{{ action_name }}">
+            <input type="hidden" name="apply" value="1">
+            <input type="submit" class="button" value="Aplicar cambios">
+            <a href="#" onclick="window.history.back();" class="button cancel-link">Cancelar</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

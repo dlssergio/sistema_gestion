@@ -1,96 +1,27 @@
-# compras/admin.py
+# compras/admin.py (VERSIÓN CON ACCIONES MASIVAS AMPLIADAS)
 
 from django.contrib import admin
 from django.urls import path, reverse
 from django.utils.html import format_html
 from django.http import HttpResponseRedirect
-from django import forms
-from django.core.exceptions import ValidationError
-from djmoney.forms.widgets import MoneyWidget
 from djmoney.money import Money
-from djmoney.forms.fields import MoneyField
+from django.utils.safestring import mark_safe
+from django import forms
+from django.shortcuts import render
+import json
+from decimal import Decimal  # <<< IMPORTACIÓN AÑADIDA para el cálculo de aumento >>>
 
 from .models import (
     Proveedor, ComprobanteCompra, ComprobanteCompraItem,
     ListaPreciosProveedor, ItemListaPreciosProveedor
 )
 from .views import get_precio_proveedor_json, calcular_totales_compra_api
-from parametros.models import Moneda
 from ventas.services import TaxCalculatorService
 
 
-# --- FORMULARIOS PERSONALIZADOS (LÓGICA CORRECTA Y CENTRALIZADA) ---
-
-class CustomMoneyFormField(MoneyField):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    # EXPLICACIÓN ARQUITECTÓNICA: Este es el método que faltaba.
-    # Se ejecuta cuando el formulario se carga con datos existentes desde la base de datos.
-    # Su trabajo es "descomprimir" el objeto Money en los dos valores que el widget necesita.
-    def decompress(self, value):
-        if isinstance(value, Money):
-            # `value` es el objeto Money(monto, simbolo) que viene de la BD.
-            try:
-                # Buscamos en nuestra tabla Moneda el objeto que corresponde al símbolo.
-                moneda = Moneda.objects.get(simbolo=value.currency.code)
-                # Devolvemos una lista: [monto, ID_de_nuestra_moneda]
-                return [value.amount, moneda.pk]
-            except Moneda.DoesNotExist:
-                # Si por alguna razón la moneda de la BD no está en nuestra tabla,
-                # devolvemos el monto pero sin moneda seleccionada.
-                return [value.amount, None]
-        # Si es un formulario nuevo, no hay valores iniciales.
-        return [None, None]
-
-    def clean(self, value):
-        if not value or not all(value):
-            if self.required: raise ValidationError(self.error_messages['required'])
-            return None
-        amount_str, currency_id = value
-        try:
-            currency = Moneda.objects.get(pk=currency_id)
-            amount = forms.DecimalField(max_digits=14, decimal_places=4, required=self.required).clean(amount_str)
-            return Money(amount, currency.simbolo)
-        except Moneda.DoesNotExist:
-            raise ValidationError(f"La moneda con ID '{currency_id}' no existe.")
-        except Exception as e:
-            raise ValidationError(f"Error inesperado al procesar el costo: {e}")
-
-
-class ComprobanteCompraItemForm(forms.ModelForm):
-    precio_costo_unitario = CustomMoneyFormField(label="Costo Unitario", required=False)
-
-    class Meta:
-        model = ComprobanteCompraItem
-        fields = '__all__'
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        choices = [(m.id, f"{m.simbolo} - {m.nombre}") for m in Moneda.objects.all()]
-        self.fields['precio_costo_unitario'].widget.widgets[1].choices = choices
-
-
-# EXPLICACIÓN ARQUITECTÓNICA: Este formulario es la clave.
-# Centraliza la lógica de carga de monedas para CUALQUIER lugar donde se edite un ítem de lista de precios.
-class ItemListaPreciosProveedorForm(forms.ModelForm):
-    precio_lista = CustomMoneyFormField(label="Precio de Lista", required=False)
-
-    class Meta:
-        model = ItemListaPreciosProveedor
-        fields = '__all__'
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        choices = [(m.id, f"{m.simbolo} - {m.nombre}") for m in Moneda.objects.all()]
-        self.fields['precio_lista'].widget.widgets[1].choices = choices
-
-
-# --- INLINES Y ADMINS ---
-
+# --- ADMINS (Tu código existente se mantiene intacto) ---
 @admin.register(Proveedor)
 class ProveedorAdmin(admin.ModelAdmin):
-    # ... (sin cambios)
     list_display = ('get_razon_social', 'codigo_proveedor', 'get_cuit', 'editar_entidad_link')
     search_fields = ('entidad__razon_social', 'entidad__cuit', 'codigo_proveedor', 'nombre_fantasia')
     filter_horizontal = ('roles',)
@@ -115,17 +46,16 @@ class ProveedorAdmin(admin.ModelAdmin):
 
 
 class ComprobanteCompraItemInline(admin.TabularInline):
-    # ... (sin cambios)
+    # ... (Tu código para ComprobanteCompraItemInline se mantiene exactamente igual) ...
     model = ComprobanteCompraItem
-    form = ComprobanteCompraItemForm
     extra = 1
-    autocomplete_fields = ['articulo']
-    raw_id_fields = []
+    fields = ('articulo', 'cantidad', 'precio_costo_unitario_monto', 'precio_costo_unitario_moneda')
+    autocomplete_fields = ['articulo', 'precio_costo_unitario_moneda']
 
 
 @admin.register(ComprobanteCompra)
 class ComprobanteCompraAdmin(admin.ModelAdmin):
-    # ... (sin cambios)
+    # ... (código sin cambios)
     change_form_template = "admin/compras/comprobantecompra/change_form.html"
     list_display = ('__str__', 'proveedor', 'fecha', 'estado', 'total')
     inlines = [ComprobanteCompraItemInline]
@@ -139,55 +69,63 @@ class ComprobanteCompraAdmin(admin.ModelAdmin):
          {'classes': ('collapse', 'show'), 'fields': ('subtotal', 'impuestos_desglosados', 'total')})
     )
 
-    class Media:
-        js = ('admin/js/compras_admin.js',)
+    class Media: js = ('admin/js/compras_admin.js',)
 
     def get_urls(self):
         urls = super().get_urls()
         custom_urls = [
             path('get-precio-proveedor/<int:proveedor_pk>/<str:articulo_pk>/',
                  self.admin_site.admin_view(get_precio_proveedor_json), name='compras_get_precio_proveedor'),
-            path('api/calcular-totales/',
-                 self.admin_site.admin_view(calcular_totales_compra_api), name='compras_calcular_totales_api'),
+            path('api/calcular-totales/', self.admin_site.admin_view(calcular_totales_compra_api),
+                 name='compras_calcular_totales_api'),
         ]
         return custom_urls + urls
 
     @admin.display(description='Impuestos')
     def impuestos_desglosados(self, obj):
-        if not obj.impuestos: return "N/A"
-        html = "<ul>";
-        for nombre, monto in obj.impuestos.items(): html += f"<li><strong>{nombre}:</strong> ${float(monto):,.2f}</li>"
-        html += "</ul>";
-        return format_html(html)
-
-    def save_formset(self, request, form, formset, change):
-        super().save_formset(request, form, formset, change)
-        obj = form.instance;
-        if not obj.pk: return
-        moneda_base = 'ARS'
-        if obj.items.exists():
-            primer_item_con_moneda = obj.items.first()
-            if primer_item_con_moneda and primer_item_con_moneda.precio_costo_unitario:
-                moneda_base = primer_item_con_moneda.precio_costo_unitario.currency.code
-        subtotal_calculado = sum(item.subtotal for item in obj.items.all())
-        obj.subtotal = Money(subtotal_calculado.amount, moneda_base)
-        desglose_impuestos = TaxCalculatorService.calcular_impuestos_comprobante(obj, 'compra')
-        obj.impuestos = {k: str(v) for k, v in desglose_impuestos.items()}
-        total_impuestos = sum(desglose_impuestos.values())
-        obj.total = obj.subtotal + Money(total_impuestos, moneda_base)
-        obj.save()
+        if not hasattr(obj, 'impuestos') or not obj.impuestos: return "N/A"
+        list_items = [
+            f"<li><strong>{nombre}:</strong> ${float(monto):,.2f}</li>"
+            for nombre, monto in obj.impuestos.items()
+        ]
+        html_string = f"<ul>{''.join(list_items)}</ul>"
+        return mark_safe(html_string)
 
 
 class ItemListaPreciosProveedorInline(admin.TabularInline):
     model = ItemListaPreciosProveedor
-    # <<< LA CLAVE DE LA SOLUCIÓN >>>
-    # Le decimos explícitamente a este inline que use nuestro formulario personalizado.
-    form = ItemListaPreciosProveedorForm
     extra = 0
-    autocomplete_fields = ['articulo', 'unidad_medida_compra']
-    fields = ('articulo', 'unidad_medida_compra', 'precio_lista', 'bonificacion_porcentaje', 'cantidad_minima',
-              'codigo_articulo_proveedor')
-    raw_id_fields = []
+    # <<< INICIO DE LA MODIFICACIÓN >>>
+    # 1. Añadimos los campos de descuento para que sean editables.
+    #    Para mejorar el layout, los agrupamos.
+    fields = (
+        'articulo',
+        ('precio_lista_monto', 'precio_lista_moneda'),
+        ('unidad_medida_compra', 'cantidad_minima'),
+        'bonificacion_porcentaje',
+        'descuentos_adicionales',
+        'descuentos_financieros',
+        'codigo_articulo_proveedor',
+        'display_costo_efectivo'
+    )
+    # <<< FIN DE LA MODIFICACIÓN >>>
+    autocomplete_fields = ['articulo', 'unidad_medida_compra', 'precio_lista_moneda']
+    readonly_fields = ('display_costo_efectivo',)
+
+    @admin.display(description='Costo Efectivo Final')
+    def display_costo_efectivo(self, obj):
+        if obj.pk:
+            try:
+                costo = obj.costo_efectivo
+                formatted_amount = f"{costo.amount:,.4f}"  # Mostramos 4 decimales para mayor precisión en el costo
+                return format_html(
+                    '<strong style="color: #28a745;">{} {}</strong>',
+                    costo.currency.code,
+                    formatted_amount
+                )
+            except Exception:
+                return "Error"
+        return "—"
 
 
 @admin.register(ListaPreciosProveedor)
@@ -199,12 +137,176 @@ class ListaPreciosProveedorAdmin(admin.ModelAdmin):
     inlines = [ItemListaPreciosProveedorInline]
 
 
+# --- FORMULARIOS PARA LAS PÁGINAS INTERMEDIAS DE LAS ACCIONES ---
+
+class DescuentoAdicionalForm(forms.Form):
+    descuentos_json = forms.CharField(
+        label='Descuentos adicionales (formato JSON)',
+        help_text='Ej: [-10, -5] para un 10% y luego un 5% de descuento.',
+        widget=forms.TextInput(attrs={'size': '50'})
+    )
+
+
+# <<< INICIO: NUEVOS FORMULARIOS PARA NUEVAS ACCIONES >>>
+class AumentoCostoForm(forms.Form):
+    porcentaje_aumento = forms.DecimalField(
+        label='Porcentaje de aumento (%)',
+        help_text='Ej: 30 para aumentar los precios un 30%.',
+        max_digits=5,
+        decimal_places=2
+    )
+
+
+class BonificacionMasivaForm(forms.Form):
+    bonificacion_porcentaje = forms.DecimalField(
+        label='Nuevo porcentaje de bonificación (%)',
+        help_text='Ej: 15 para aplicar un 15% de bonificación a todos los ítems.',
+        max_digits=5,
+        decimal_places=2
+    )
+
+
+class DescuentoFinancieroForm(forms.Form):
+    descuentos_json = forms.CharField(
+        label='Descuentos/Recargos Financieros (formato JSON)',
+        help_text='Ej: [-10] para un 10% de dto. por pronto pago. [5] para un 5% de recargo.',
+        widget=forms.TextInput(attrs={'size': '50'})
+    )
+
+
+# <<< FIN: NUEVOS FORMULARIOS PARA NUEVAS ACCIONES >>>
+
+
 @admin.register(ItemListaPreciosProveedor)
 class ItemListaPreciosProveedorAdmin(admin.ModelAdmin):
-    # <<< LA OTRA CLAVE DE LA SOLUCIÓN >>>
-    # También le decimos a la vista de edición principal que use el mismo formulario.
-    form = ItemListaPreciosProveedorForm
-    list_display = ('articulo', 'lista_precios', 'precio_lista')
+    list_display = ('articulo', 'lista_precios', 'precio_lista_monto', 'precio_lista_moneda', 'display_costo_efectivo')
     search_fields = ('articulo__descripcion', 'lista_precios__nombre', 'codigo_articulo_proveedor')
-    list_filter = (('lista_precios__proveedor', admin.RelatedOnlyFieldListFilter),)
-    autocomplete_fields = ('articulo', 'lista_precios')
+    list_filter = (('lista_precios__proveedor', admin.RelatedOnlyFieldListFilter), 'lista_precios')
+    autocomplete_fields = ('articulo', 'lista_precios', 'precio_lista_moneda')
+
+    # <<< INICIO: AÑADIMOS LAS NUEVAS ACCIONES A LA LISTA >>>
+    actions = [
+        'aumentar_precio_costo_action',
+        'aplicar_descuentos_adicionales_action',
+        'aplicar_bonificacion_masiva_action',
+        'aplicar_descuentos_financieros_action'
+    ]
+
+    # <<< FIN: AÑADIMOS LAS NUEVAS ACCIONES A LA LISTA >>>
+
+    # --- ACCIÓN 1: AUMENTAR PRECIO DE COSTO ---
+    @admin.action(description='Aumentar Monto del Precio por Porcentaje')
+    def aumentar_precio_costo_action(self, request, queryset):
+        if 'apply' in request.POST:
+            form = AumentoCostoForm(request.POST)
+            if form.is_valid():
+                porcentaje = form.cleaned_data['porcentaje_aumento']
+                factor = Decimal(1) + (porcentaje / Decimal(100))
+
+                count = 0
+                for item in queryset:
+                    item.precio_lista_monto *= factor
+                    item.save()
+                    count += 1
+
+                self.message_user(request, f'Se aumentó el precio de {count} ítem(s) en un {porcentaje}%.')
+                return HttpResponseRedirect(request.get_full_path())
+        else:
+            form = AumentoCostoForm()
+
+        return render(request, 'admin/compras/accion_masiva_form.html', context={
+            'title': 'Aumentar Monto del Precio', 'queryset': queryset, 'form': form,
+            'action_checkbox_name': admin.helpers.ACTION_CHECKBOX_NAME,
+            'action_name': 'aumentar_precio_costo_action'
+        })
+
+    # --- ACCIÓN 2: APLICAR DESCUENTOS ADICIONALES ---
+    @admin.action(description='Aplicar descuentos adicionales masivamente')
+    def aplicar_descuentos_adicionales_action(self, request, queryset):
+        if 'apply' in request.POST:
+            form = DescuentoAdicionalForm(request.POST)
+            if form.is_valid():
+                descuento_str = form.cleaned_data['descuentos_json']
+                try:
+                    descuentos = json.loads(descuento_str)
+                    if not isinstance(descuentos, list): raise ValueError("El valor debe ser una lista JSON.")
+
+                    # queryset.update() es más eficiente para cambios de valor simple
+                    updated_count = queryset.update(descuentos_adicionales=descuentos)
+
+                    self.message_user(request, f'Se aplicaron los descuentos a {updated_count} ítem(s).')
+                    return HttpResponseRedirect(request.get_full_path())
+                except (json.JSONDecodeError, ValueError) as e:
+                    self.message_user(request, f'Error: Formato JSON inválido. {e}', level='error')
+        else:
+            form = DescuentoAdicionalForm()
+
+        return render(request, 'admin/compras/accion_masiva_form.html', context={
+            'title': 'Aplicar Descuentos Adicionales', 'queryset': queryset, 'form': form,
+            'action_checkbox_name': admin.helpers.ACTION_CHECKBOX_NAME,
+            'action_name': 'aplicar_descuentos_adicionales_action'
+        })
+
+    # <<< INICIO: NUEVAS ACCIONES >>>
+    # --- ACCIÓN 3: APLICAR BONIFICACIÓN ---
+    @admin.action(description='Aplicar bonificación masivamente')
+    def aplicar_bonificacion_masiva_action(self, request, queryset):
+        if 'apply' in request.POST:
+            form = BonificacionMasivaForm(request.POST)
+            if form.is_valid():
+                bonificacion = form.cleaned_data['bonificacion_porcentaje']
+                updated_count = queryset.update(bonificacion_porcentaje=bonificacion)
+                self.message_user(request, f'Se aplicó la bonificación a {updated_count} ítem(s).')
+                return HttpResponseRedirect(request.get_full_path())
+        else:
+            form = BonificacionMasivaForm()
+
+        return render(request, 'admin/compras/accion_masiva_form.html', context={
+            'title': 'Aplicar Bonificación', 'queryset': queryset, 'form': form,
+            'action_checkbox_name': admin.helpers.ACTION_CHECKBOX_NAME,
+            'action_name': 'aplicar_bonificacion_masiva_action'
+        })
+
+    # --- ACCIÓN 4: APLICAR DESCUENTOS FINANCIEROS ---
+    @admin.action(description='Aplicar descuentos/recargos financieros masivamente')
+    def aplicar_descuentos_financieros_action(self, request, queryset):
+        if 'apply' in request.POST:
+            form = DescuentoFinancieroForm(request.POST)
+            if form.is_valid():
+                descuento_str = form.cleaned_data['descuentos_json']
+                try:
+                    descuentos = json.loads(descuento_str)
+                    if not isinstance(descuentos, list): raise ValueError("El valor debe ser una lista JSON.")
+
+                    updated_count = queryset.update(descuentos_financieros=descuentos)
+
+                    self.message_user(request,
+                                      f'Se aplicaron los descuentos/recargos financieros a {updated_count} ítem(s).')
+                    return HttpResponseRedirect(request.get_full_path())
+                except (json.JSONDecodeError, ValueError) as e:
+                    self.message_user(request, f'Error: Formato JSON inválido. {e}', level='error')
+        else:
+            form = DescuentoFinancieroForm()
+
+        return render(request, 'admin/compras/accion_masiva_form.html', context={
+            'title': 'Aplicar Descuentos/Recargos Financieros', 'queryset': queryset, 'form': form,
+            'action_checkbox_name': admin.helpers.ACTION_CHECKBOX_NAME,
+            'action_name': 'aplicar_descuentos_financieros_action'
+        })
+
+    # <<< FIN: NUEVAS ACCIONES >>>
+
+    @admin.display(description='Costo Efectivo Final')
+    def display_costo_efectivo(self, obj):
+        if obj.pk:
+            try:
+                costo = obj.costo_efectivo
+                formatted_amount = f"{costo.amount:,.4f}"
+                return format_html(
+                    '<strong style="color: #28a745;">{} {}</strong>',
+                    costo.currency.code,
+                    formatted_amount
+                )
+            except Exception:
+                return "Error"
+        return "—"

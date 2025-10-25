@@ -1,11 +1,30 @@
 {% extends "admin/change_form.html" %}
 {% load i18n admin_urls static %}
 
-{% block content %}
-    {# Renderiza el formulario principal como lo hace Django normalmente #}
+{# <<< INICIO DE LA CORRECCIÓN 1: La Etiqueta Mágica 'media' >>> #}
+{# Este bloque añade los CSS y JS necesarios al <head> de la página. #}
+{# La etiqueta {{ media }} es crucial: recolecta todos los 'Media' del #}
+{# admin y del formulario, incluyendo los de djmoney y jQuery. #}
+{% block extrahead %}
     {{ block.super }}
+    {{ media }}
+{% endblock %}
+{# <<< FIN DE LA CORRECCIÓN 1 >>> #}
 
-    {# Inyectamos los datos para el JavaScript en divs ocultos #}
+
+{% block content %}
+    {# El contenido del formulario se mantiene igual #}
+    {{ block.super }}
     <div id="cotizaciones-json" style="display: none;">{{ cotizaciones_json|safe }}</div>
     <div id="tasas-impuestos-json" style="display: none;">{{ tasas_impuestos_json|safe }}</div>
 {% endblock %}
+
+
+{# <<< INICIO DE LA CORRECCIÓN 2: Carga Segura del Script Personalizado >>> #}
+{# Este bloque se asegura de que nuestro script se ejecute al final, #}
+{# garantizando que jQuery y todo lo demás ya está disponible. #}
+{% block admin_change_form_document_ready %}
+    {{ block.super }}
+    <script src="{% static 'admin/js/articulo_admin.js' %}" defer></script>
+{% endblock %}
+{# <<< FIN DE LA CORRECCIÓN 2 >>> #}
