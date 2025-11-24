@@ -1,4 +1,4 @@
-# ventas/admin.py (VERSIÓN RESTAURADA Y FUNCIONAL)
+# ventas/admin.py (VERSIÓN FINAL CON IMPORTACIÓN CORREGIDA)
 
 from auditlog.registry import auditlog
 from django.contrib import admin
@@ -7,34 +7,41 @@ from django.utils.html import format_html
 from django.http import HttpResponseRedirect
 from decimal import Decimal
 
-from .models import Cliente, ComprobanteVenta, ComprobanteVentaItem
-from .views import get_precio_articulo, calcular_totales_api
+from .models import Cliente, ComprobanteVenta, ComprobanteVentaItem, PriceList, ProductPrice
+
+# --- INICIO DE LA CORRECCIÓN ---
+# Añadimos la nueva vista 'get_precio_articulo_cliente' a la importación.
+from .views import get_precio_articulo, calcular_totales_api, get_precio_articulo_cliente
+# --- FIN DE LA CORRECCIÓN ---
+
 from .services import TaxCalculatorService
 
 @admin.register(Cliente)
 class ClienteAdmin(admin.ModelAdmin):
     list_display = ('get_razon_social', 'get_cuit', 'editar_entidad_link')
     search_fields = ('entidad__razon_social', 'entidad__cuit')
+    autocomplete_fields = ['price_list']
+
     def get_razon_social(self, obj): return obj.entidad.razon_social
     get_razon_social.short_description = 'Razón Social'
+
     def get_cuit(self, obj): return obj.entidad.cuit
     get_cuit.short_description = 'CUIT'
+
     def editar_entidad_link(self, obj):
         url = reverse('admin:entidades_entidad_change', args=[obj.entidad.pk])
         return format_html('<a href="{}">Editar Ficha Completa</a>', url)
     editar_entidad_link.short_description = 'Acciones'
+
     def add_view(self, request, form_url='', extra_context=None):
         url = reverse('admin:entidades_entidad_add') + '?rol=cliente'
         return HttpResponseRedirect(url)
-    def has_change_permission(self, request, obj=None): return False
 
 class ComprobanteVentaItemInline(admin.TabularInline):
     model = ComprobanteVentaItem
     extra = 1
-    # EXPLICACIÓN: Se restaura a `autocomplete_fields`, que es el estado que funcionaba.
     autocomplete_fields = ['articulo']
     readonly_fields = ('subtotal',)
-    raw_id_fields = []
 
 @admin.register(ComprobanteVenta)
 class ComprobanteVentaAdmin(admin.ModelAdmin):
@@ -60,11 +67,15 @@ class ComprobanteVentaAdmin(admin.ModelAdmin):
             path('api/get-precio-articulo/<str:pk>/',
                  self.admin_site.admin_view(get_precio_articulo),
                  name='ventas_get_precio_articulo'),
+            path('api/get-precio-articulo-cliente/<int:cliente_pk>/<str:articulo_pk>/',
+                 self.admin_site.admin_view(get_precio_articulo_cliente),
+                 name='ventas_get_precio_articulo_cliente'),
             path('api/calcular-totales/',
                  self.admin_site.admin_view(calcular_totales_api),
                  name='ventas_calcular_totales_api'),
         ]
         return custom_urls + urls
+
     @admin.display(description='Impuestos')
     def impuestos_desglosados(self, obj):
         if not obj.impuestos: return "N/A"
@@ -85,6 +96,36 @@ class ComprobanteVentaAdmin(admin.ModelAdmin):
         total_impuestos = sum(desglose_impuestos.values())
         obj.total = obj.subtotal + total_impuestos
         obj.save()
+
+class ProductPriceInline(admin.TabularInline):
+    """
+    Este inline nos permite añadir y editar precios de artículos
+    directamente DENTRO de la página de una Lista de Precios.
+    """
+    model = ProductPrice
+    extra = 1
+    autocomplete_fields = ['product', 'price_moneda']
+    fields = ('product', 'price_monto', 'price_moneda', 'min_quantity', 'max_quantity')
+
+@admin.register(PriceList)
+class PriceListAdmin(admin.ModelAdmin):
+    """
+    Administrador para el modelo principal de Listas de Precios de Venta.
+    """
+    list_display = ('name', 'code', 'is_default', 'valid_from', 'valid_until')
+    search_fields = ('name', 'code')
+    inlines = [ProductPriceInline]
+
+@admin.register(ProductPrice)
+class ProductPriceAdmin(admin.ModelAdmin):
+    """
+    Administrador para ver todos los precios de productos de forma individual.
+    Útil para búsquedas y filtros avanzados.
+    """
+    list_display = ('product', 'price_list', 'price', 'min_quantity')
+    list_filter = ('price_list',)
+    search_fields = ('product__descripcion', 'product__cod_articulo', 'price_list__name')
+    autocomplete_fields = ['product', 'price_list', 'price_moneda']
 
 auditlog.register(ComprobanteVenta)
 auditlog.register(Cliente)

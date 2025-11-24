@@ -1,3 +1,5 @@
+// static/admin/js/comprobante_venta_admin.js (VERSIÓN CON PRECIOS POR CLIENTE)
+
 if (window.django && window.django.jQuery) {
     const $ = django.jQuery;
 
@@ -77,48 +79,86 @@ if (window.django && window.django.jQuery) {
             .catch(error => console.error('Faro ERP (Error en Fetch):', error));
         }
 
-        // --- MANEJADOR DE EVENTOS (GATILLOS) ---
+        // --- MANEJADOR DE EVENTOS (GATILLOS) CON LÓGICA MEJORADA ---
         function handleArticuloChange(selectElement) {
             const articuloId = $(selectElement).val();
             const row = $(selectElement).closest('tr.dynamic-items');
             const cantidadInput = row.find('input[name$="-cantidad"]');
             const precioInput = row.find('input[name$="-precio_unitario_original"]');
 
-            if (!articuloId) {
+            // --- INICIO DE LA MODIFICACIÓN ---
+            // 1. Obtenemos el ID del cliente seleccionado en el formulario principal.
+            const clienteId = $('#id_cliente').val();
+
+            if (!articuloId) { // Si se deselecciona un artículo, limpiar y recalcular.
                 precioInput.val('');
-                cantidadInput.val('');
+                if (cantidadInput.val() === '1.000') { // Solo limpiar si era el valor por defecto
+                    cantidadInput.val('');
+                }
                 actualizarCalculos();
                 return;
             }
 
-            fetch(`/admin/ventas/comprobanteventa/api/get-precio-articulo/${articuloId}/`)
-                .then(response => response.json())
+            // 2. Si no se ha seleccionado un cliente, no podemos buscar el precio.
+            if (!clienteId) {
+                alert("Por favor, seleccione un cliente antes de añadir artículos.");
+                $(selectElement).val(null).trigger('change'); // Resetea el selector de artículo
+                return;
+            }
+            // --- FIN DE LA MODIFICACIÓN ---
+
+            // 3. Construimos y llamamos a la nueva URL inteligente.
+            fetch(`/admin/ventas/comprobanteventa/api/get-precio-articulo-cliente/${clienteId}/${articuloId}/`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('No se encontró un precio para este cliente y artículo.');
+                    }
+                    return response.json();
+                })
                 .then(data => {
                     if (data.precio) {
                         precioInput.val(data.precio);
-                        if (!cantidadInput.val()) {
+                        if (!cantidadInput.val() || parseFloat(cantidadInput.val()) === 0) {
                             cantidadInput.val('1');
                         }
-                        actualizarCalculos(); // Llamada central
+                        actualizarCalculos();
                     }
                 })
-                .catch(error => console.error('Faro ERP (Error):', error));
+                .catch(error => {
+                    console.error('Faro ERP (Error de Precio):', error);
+                    // Como fallback, intentamos obtener el precio base del artículo
+                    fetch(`/admin/ventas/comprobanteventa/api/get-precio-articulo/${articuloId}/`)
+                        .then(res => res.json())
+                        .then(data => {
+                            if(data.precio) {
+                                precioInput.val(data.precio);
+                                if (!cantidadInput.val() || parseFloat(cantidadInput.val()) === 0) {
+                                    cantidadInput.val('1');
+                                }
+                            }
+                            actualizarCalculos();
+                        });
+                });
         }
 
         // --- LISTENERS ---
+        // Se adjunta el listener a los eventos correctos para que funcione con los widgets de Django.
         inlineContainer.on('change', 'select[name$="-articulo"]', function() { handleArticuloChange(this); });
+
         $(document).on('formset:added', function(event, $row, formsetName) {
             if (formsetName === 'items') {
                 if ($row.find('td.field-subtotal').length === 0) {
                      $row.append('<td class="field-subtotal" style="font-weight: bold; text-align: right; padding-right: 1em;">-</td>');
                 }
                 const selectElement = $row.find('select[name$="-articulo"]');
+                // Usamos un pequeño delay para asegurar que el widget de select2 se inicialice si lo hubiera.
                 setTimeout(() => { selectElement.on('change', function() { handleArticuloChange(this); }); }, 100);
             }
         });
-        inlineContainer.on('input', 'input[name$="-cantidad"], input[name$="-precio_unitario_original"]', function() { actualizarCalculos(); });
-        $('#id_tipo_comprobante').on('change', function() { actualizarCalculos(); }); // Recalcula si cambia el tipo
 
-        actualizarCalculos(); // Cálculo inicial
+        inlineContainer.on('input', 'input[name$="-cantidad"], input[name$="-precio_unitario_original"]', function() { actualizarCalculos(); });
+        $('#id_tipo_comprobante').on('change', function() { actualizarCalculos(); });
+
+        actualizarCalculos(); // Cálculo inicial al cargar la página.
     });
 }
