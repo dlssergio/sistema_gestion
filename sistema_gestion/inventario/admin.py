@@ -1,4 +1,4 @@
-# inventario/admin.py (VERSIÓN DEFINITIVA Y SEGURA)
+# inventario/admin.py
 
 import json
 from django import forms
@@ -12,7 +12,7 @@ from .models import Articulo, Marca, Rubro, Deposito, StockArticulo, ConversionU
 from parametros.models import Moneda, Impuesto, CategoriaImpositiva
 
 
-# --- SECCIÓN DE CLASES AUXILIARES (SE MANTIENE PARA COMPATIBILIDAD) ---
+# --- CLASES AUXILIARES ---
 class CustomMoneyFormField(MoneyField):
     def clean(self, value):
         if not value or not all(value):
@@ -29,27 +29,7 @@ class CustomMoneyFormField(MoneyField):
             raise ValidationError(f"Error inesperado al procesar el costo: {e}")
 
 
-# Este formulario era específico para la versión anterior del modelo Articulo.
-# Ya no se usa aquí, pero se deja por si alguna otra customización dependiera de él.
-class ArticuloAdminForm(forms.ModelForm):
-    precio_costo = CustomMoneyFormField(label="Precio de Costo", required=False)
-    precio_venta = CustomMoneyFormField(label="Precio de Venta", required=False)
-
-    class Meta:
-        model = Articulo
-        fields = '__all__'
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        choices = [(m.id, f"{m.simbolo} - {m.nombre}") for m in Moneda.objects.all()]
-        # Se añaden comprobaciones para evitar errores si los campos no existen en el form
-        if 'precio_costo' in self.fields:
-            self.fields['precio_costo'].widget.widgets[1].choices = choices
-        if 'precio_venta' in self.fields:
-            self.fields['precio_venta'].widget.widgets[1].choices = choices
-
-
-# --- ADMINS DE MODELOS ---
+# --- ADMINS ---
 
 @admin.register(Marca)
 class MarcaAdmin(admin.ModelAdmin): search_fields = ['nombre']
@@ -81,20 +61,17 @@ class ConversionUnidadMedidaInline(admin.TabularInline):
 
 @admin.register(Articulo)
 class ArticuloAdmin(admin.ModelAdmin):
-    # --- INICIO DE LA CORRECCIÓN CLAVE ---
-    # 1. YA NO USAMOS EL FORMULARIO PERSONALIZADO. Django usará el formulario por defecto.
-    # form = ArticuloAdminForm
-
     change_form_template = 'admin/inventario/articulo/change_form.html'
 
-    # 2. Reemplazamos 'precio_venta' por un método 'display' seguro.
     list_display = (
         'cod_articulo', 'descripcion', 'marca', 'stock_total',
-        'display_precio_venta',  # <-- CORRECCIÓN
+        'display_precio_venta',
         'esta_activo', 'get_proveedor_fuente_costo'
     )
     list_filter = ('esta_activo', 'marca', 'rubro', 'perfil')
     search_fields = ('cod_articulo', 'descripcion', 'ean')
+
+    # Autocomplete fields estándar
     autocomplete_fields = [
         'marca', 'rubro', 'grupo_unidades', 'unidad_medida_stock', 'unidad_medida_venta',
         'categoria_impositiva', 'precio_costo_moneda', 'precio_venta_moneda'
@@ -102,13 +79,16 @@ class ArticuloAdmin(admin.ModelAdmin):
     filter_horizontal = ('impuestos',)
     readonly_fields = ('precio_final_form',)
 
-    # 3. Los 'fieldsets' ahora usan los NOMBRES DE CAMPO REALES del modelo refactorizado.
+    # --- CORRECCIÓN FINAL: Usamos los nombres EXPLÍCITOS del modelo ---
     fieldsets = (
         ('Información Principal',
          {'fields': ('cod_articulo', 'ean', 'qr', 'descripcion', 'perfil', 'marca', 'rubro', 'esta_activo')}),
         ('Precios, Costos e Impuestos',
          {'fields': (
-             ('precio_costo_monto', 'precio_costo_moneda'), 'utilidad', ('precio_venta_monto', 'precio_venta_moneda'),
+             # Tupla para mostrar en la misma línea
+             ('precio_costo_monto', 'precio_costo_moneda'),
+             'utilidad',
+             ('precio_venta_monto', 'precio_venta_moneda'),
              'categoria_impositiva', 'impuestos')}),
         ('Precio Final (Calculado)', {'fields': ('precio_final_form',)}),
         ('Gestión de Inventario y Unidades',
@@ -120,9 +100,9 @@ class ArticuloAdmin(admin.ModelAdmin):
     class Media:
         js = ('admin/js/articulo_admin.js',)
 
-    # 4. Se define el método display con su correspondiente decorador para ordenar.
     @admin.display(description="Precio Venta", ordering='precio_venta_monto')
     def display_precio_venta(self, obj):
+        # Usamos la property del modelo para mostrarlo bonito en la lista
         return obj.precio_venta
 
     def get_search_results(self, request, queryset, search_term):
@@ -141,13 +121,19 @@ class ArticuloAdmin(admin.ModelAdmin):
         prov = obj.proveedor_actualiza_precio
         return prov.entidad.razon_social if prov else "N/A"
 
-    # 5. Se corrige la consulta para usar el modelo 'Impuesto' en lugar de 'ReglaImpuesto'.
+    # Contexto para el JavaScript
     def add_extra_context(self, request, extra_context=None):
         extra_context = extra_context or {}
-        cotizaciones = {str(m.id): m.cotizacion for m in Moneda.objects.all()}
-        extra_context['cotizaciones_json'] = json.dumps(cotizaciones, default=str)
-        tasas_impuestos = list(Impuesto.objects.values('id', 'tasa'))  # <-- CORRECCIÓN
-        extra_context['tasas_impuestos_json'] = json.dumps(tasas_impuestos, default=str)
+        # Convertimos Decimal a float para que sea JSON serializable
+        cotizaciones = {str(m.id): float(m.cotizacion) for m in Moneda.objects.all()}
+        extra_context['cotizaciones_json'] = json.dumps(cotizaciones)
+
+        # Enviamos ID y Tasa de impuestos
+        tasas_impuestos = list(Impuesto.objects.values('id', 'tasa'))
+        for t in tasas_impuestos:
+            t['tasa'] = float(t['tasa'])
+
+        extra_context['tasas_impuestos_json'] = json.dumps(tasas_impuestos)
         return extra_context
 
     def add_view(self, request, form_url='', extra_context=None):
@@ -159,7 +145,7 @@ class ArticuloAdmin(admin.ModelAdmin):
 
     @admin.display(description="Precio Final con Impuestos")
     def precio_final_form(self, obj):
-        return "Calculado en tiempo real..."
+        return "Calculado automáticamente..."
 
 
 auditlog.register(Articulo)

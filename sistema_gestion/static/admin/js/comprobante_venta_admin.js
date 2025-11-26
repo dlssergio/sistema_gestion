@@ -1,164 +1,199 @@
-// static/admin/js/comprobante_venta_admin.js (VERSIÓN CON PRECIOS POR CLIENTE)
+/* static/admin/js/comprobante_venta_admin.js - VERSIÓN DEFINITIVA */
+'use strict';
 
-if (window.django && window.django.jQuery) {
+window.addEventListener('DOMContentLoaded', function() {
+    // Verificación de seguridad
+    if (!window.django || !window.django.jQuery) return;
     const $ = django.jQuery;
 
-    $(document).ready(function() {
-        const inlineContainer = $('#items-group');
-        if (!inlineContainer.length) return;
+    const inlineGroup = $('#items-group');
+    if (!inlineGroup.length) return;
 
-        // --- INTERFAZ ---
-        if (inlineContainer.find('th.field-subtotal').length === 0) {
-            inlineContainer.find('thead tr').append('<th class="field-subtotal">SUBTOTAL</th>');
-        }
-        inlineContainer.find('tbody tr').each(function() {
-            if ($(this).find('td.field-subtotal').length === 0) {
-                $(this).append('<td class="field-subtotal" style="font-weight: bold; text-align: right; padding-right: 1em;">-</td>');
+    console.log("🚀 Faro ERP: Comprobante Venta Script CARGADO.");
+
+    // --- 1. FUNCIÓN DE CÁLCULO DE TOTALES (Llama al Backend) ---
+    function actualizarCalculos() {
+        const itemsData = [];
+
+        // Recorremos las filas visibles
+        inlineGroup.find('tr.dynamic-items').each(function() {
+            const row = $(this);
+            // Ignoramos filas eliminadas o vacías
+            if (row.hasClass('empty-form') || row.find('.action-checkbox input').is(':checked')) return;
+
+            const articuloId = row.find('select[name$="-articulo"]').val();
+            if (articuloId) {
+                itemsData.push({
+                    articulo: articuloId,
+                    cantidad: row.find('input[name$="-cantidad"]').val() || '0',
+                    precio_monto: row.find('input[name$="-precio_unitario_original"]').val() || '0',
+                    // Asumimos moneda base por defecto si no hay campo explícito en el frontend
+                    // El backend lo manejará
+                });
             }
         });
 
-        // --- FUNCIÓN DE CÁLCULO CENTRAL ---
-        function actualizarCalculos() {
-            const itemsData = [];
-            // Recolectamos los datos de cada fila
-            inlineContainer.find('tbody tr.dynamic-items').not('.empty-form').each(function() {
+        // Llamada a la API de cálculo de totales
+        fetch(`/admin/ventas/comprobanteventa/api/calcular-totales/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': $('input[name="csrfmiddlewaretoken"]').val()
+            },
+            body: JSON.stringify({
+                items: itemsData,
+                tipo_comprobante: $('#id_tipo_comprobante').val()
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error("❌ Error cálculo backend:", data.error);
+                return;
+            }
+
+            // Actualizamos Totales Generales
+            $('.field-subtotal .readonly').text(`${data.currency_symbol} ${data.subtotal}`);
+            $('.field-total .readonly').text(`${data.currency_symbol} ${data.total}`);
+
+            // Actualizamos Desglose de Impuestos
+            let impuestosHtml = '<ul style="margin: 0; padding-left: 15px;">';
+            for (const [nombre, monto] of Object.entries(data.impuestos)) {
+                impuestosHtml += `<li><strong>${nombre}:</strong> ${data.currency_symbol} ${monto}</li>`;
+            }
+            impuestosHtml += '</ul>';
+            $('.field-impuestos_desglosados .readonly').html(impuestosHtml);
+
+            // Actualizamos subtotales por línea (Visual)
+            // Nota: Esto asume que las filas están en orden.
+            // Una implementación más estricta usaría IDs de línea, pero para el Admin esto basta.
+            let i = 0;
+            inlineGroup.find('tr.dynamic-items:not(.empty-form)').each(function() {
+                if ($(this).find('.action-checkbox input').is(':checked')) return;
+
                 const row = $(this);
-                const articuloId = row.find('select[name$="-articulo"]').val();
-                if (articuloId) {
-                    itemsData.push({
-                        articulo: articuloId,
-                        cantidad: row.find('input[name$="-cantidad"]').val() || '0',
-                        precio: row.find('input[name$="-precio_unitario_original"]').val() || '0',
-                    });
-                }
+                const cantidad = parseFloat(row.find('input[name$="-cantidad"]').val()) || 0;
+                const precio = parseFloat(row.find('input[name$="-precio_unitario_original"]').val()) || 0;
+                const subtotal = cantidad * precio;
+
+                row.find('.field-subtotal').text(`$ ${subtotal.toLocaleString('es-AR', {minimumFractionDigits: 2})}`);
+                i++;
             });
+        })
+        .catch(err => console.error("Error Fetch Totales:", err));
+    }
 
-            // Llamamos a nuestra nueva API para que el backend haga el trabajo pesado
-            fetch(`/admin/ventas/comprobanteventa/api/calcular-totales/`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': $('input[name="csrfmiddlewaretoken"]').val()
-                },
-                body: JSON.stringify({
-                    items: itemsData,
-                    // Enviamos también el tipo de comprobante, por si afecta los impuestos
-                    tipo_comprobante: $('#id_tipo_comprobante').val()
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.error) {
-                    console.error("Faro ERP (Error de cálculo):", data.error);
-                    return;
-                }
+    // --- 2. FUNCIÓN DE BÚSQUEDA DE PRECIO (Llama al Backend) ---
+    async function handleArticuloChange(selectElement) {
+        const $select = $(selectElement);
+        const row = $select.closest('tr.dynamic-items');
+        const articuloId = $select.val();
 
-                // Actualizamos la sección "Totales" de arriba
-                $('.field-subtotal .readonly').text(`$${data.subtotal}`);
-                $('.field-total .readonly').text(`$${data.total}`);
+        const precioInput = row.find('input[name$="-precio_unitario_original"]');
+        const cantidadInput = row.find('input[name$="-cantidad"]');
 
-                // Construimos el HTML para el desglose de impuestos
-                let impuestosHtml = '<ul>';
-                for (const [nombre, monto] of Object.entries(data.impuestos)) {
-                    impuestosHtml += `<li><strong>${nombre}:</strong> $${monto}</li>`;
-                }
-                impuestosHtml += '</ul>';
-                $('.field-impuestos_desglosados .readonly').html(impuestosHtml);
-
-                // Actualizamos los subtotales por línea (opcional, pero buena UX)
-                let i = 0;
-                inlineContainer.find('tbody tr.dynamic-items').not('.empty-form').each(function() {
-                    const row = $(this);
-                    const cantidad = parseFloat(row.find('input[name$="-cantidad"]').val()) || 0;
-                    const precio = parseFloat(row.find('input[name$="-precio_unitario_original"]').val()) || 0;
-                    const subtotal = cantidad * precio;
-                    row.find('.field-subtotal').text(`$${subtotal.toLocaleString('es-AR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`);
-                    i++;
-                });
-            })
-            .catch(error => console.error('Faro ERP (Error en Fetch):', error));
+        // VALIDACIÓN 1: Cliente Obligatorio
+        const clienteId = $('#id_cliente').val();
+        if (!clienteId && articuloId) {
+            alert("⚠️ Por favor, seleccione un CLIENTE primero para cargar la lista de precios correcta.");
+            $select.val(null).trigger('change.select2'); // Limpiar selección
+            return;
         }
 
-        // --- MANEJADOR DE EVENTOS (GATILLOS) CON LÓGICA MEJORADA ---
-        function handleArticuloChange(selectElement) {
-            const articuloId = $(selectElement).val();
-            const row = $(selectElement).closest('tr.dynamic-items');
-            const cantidadInput = row.find('input[name$="-cantidad"]');
-            const precioInput = row.find('input[name$="-precio_unitario_original"]');
-
-            // --- INICIO DE LA MODIFICACIÓN ---
-            // 1. Obtenemos el ID del cliente seleccionado en el formulario principal.
-            const clienteId = $('#id_cliente').val();
-
-            if (!articuloId) { // Si se deselecciona un artículo, limpiar y recalcular.
-                precioInput.val('');
-                if (cantidadInput.val() === '1.000') { // Solo limpiar si era el valor por defecto
-                    cantidadInput.val('');
-                }
-                actualizarCalculos();
-                return;
-            }
-
-            // 2. Si no se ha seleccionado un cliente, no podemos buscar el precio.
-            if (!clienteId) {
-                alert("Por favor, seleccione un cliente antes de añadir artículos.");
-                $(selectElement).val(null).trigger('change'); // Resetea el selector de artículo
-                return;
-            }
-            // --- FIN DE LA MODIFICACIÓN ---
-
-            // 3. Construimos y llamamos a la nueva URL inteligente.
-            fetch(`/admin/ventas/comprobanteventa/api/get-precio-articulo-cliente/${clienteId}/${articuloId}/`)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('No se encontró un precio para este cliente y artículo.');
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.precio) {
-                        precioInput.val(data.precio);
-                        if (!cantidadInput.val() || parseFloat(cantidadInput.val()) === 0) {
-                            cantidadInput.val('1');
-                        }
-                        actualizarCalculos();
-                    }
-                })
-                .catch(error => {
-                    console.error('Faro ERP (Error de Precio):', error);
-                    // Como fallback, intentamos obtener el precio base del artículo
-                    fetch(`/admin/ventas/comprobanteventa/api/get-precio-articulo/${articuloId}/`)
-                        .then(res => res.json())
-                        .then(data => {
-                            if(data.precio) {
-                                precioInput.val(data.precio);
-                                if (!cantidadInput.val() || parseFloat(cantidadInput.val()) === 0) {
-                                    cantidadInput.val('1');
-                                }
-                            }
-                            actualizarCalculos();
-                        });
-                });
+        // Si borró el artículo, limpiamos
+        if (!articuloId) {
+            precioInput.val('0.00');
+            actualizarCalculos();
+            return;
         }
 
-        // --- LISTENERS ---
-        // Se adjunta el listener a los eventos correctos para que funcione con los widgets de Django.
-        inlineContainer.on('change', 'select[name$="-articulo"]', function() { handleArticuloChange(this); });
+        console.log(`🔎 Buscando precio para Articulo ${articuloId} y Cliente ${clienteId}`);
 
-        $(document).on('formset:added', function(event, $row, formsetName) {
-            if (formsetName === 'items') {
-                if ($row.find('td.field-subtotal').length === 0) {
-                     $row.append('<td class="field-subtotal" style="font-weight: bold; text-align: right; padding-right: 1em;">-</td>');
+        try {
+            const url = `/admin/ventas/comprobanteventa/api/get-precio-articulo-cliente/${clienteId}/${articuloId}/`;
+            const response = await fetch(url);
+
+            if (response.ok) {
+                const data = await response.json();
+
+                // data debe devolver: { precio: "123.45", ... } o estructura PricingResult
+                // Adaptamos según lo que devuelva tu vista 'get_precio_articulo_cliente'
+                const precio = data.precio_venta_neto || data.precio || data.amount;
+
+                if (precio) {
+                    precioInput.val(precio);
+
+                    // Default cantidad 1
+                    if (!cantidadInput.val() || parseFloat(cantidadInput.val()) === 0) {
+                        cantidadInput.val('1');
+                    }
+
+                    // Efecto Visual
+                    precioInput.css({'background-color': '#d4edda', 'transition': '0.5s'});
+                    setTimeout(() => precioInput.css('background-color', ''), 500);
                 }
-                const selectElement = $row.find('select[name$="-articulo"]');
-                // Usamos un pequeño delay para asegurar que el widget de select2 se inicialice si lo hubiera.
-                setTimeout(() => { selectElement.on('change', function() { handleArticuloChange(this); }); }, 100);
+            }
+        } catch (error) {
+            console.error("❌ Error obteniendo precio:", error);
+        } finally {
+            actualizarCalculos();
+        }
+    }
+
+    // --- 3. LISTENERS (PATRÓN ROBUSTO) ---
+
+    // A. Cambio de Artículo (Select2)
+    $(document).on('select2:select', 'select[name$="-articulo"]', function(e) {
+        handleArticuloChange(this);
+    });
+
+    // B. Cambio de Artículo (Nativo / Fallback)
+    $(document).on('change', 'select[name$="-articulo"]', function(e) {
+        if (!$(this).data('select2')) {
+            handleArticuloChange(this);
+        }
+    });
+
+    // C. Recálculo de Totales al cambiar valores
+    $(document).on('input change', 'input[name$="-cantidad"], input[name$="-precio_unitario_original"]', function() {
+        // Debounce para no saturar
+        clearTimeout(window.recalcTimer);
+        window.recalcTimer = setTimeout(actualizarCalculos, 100);
+    });
+
+    // D. Cambio de Cliente -> Reiniciar Precios (Seguridad)
+    $('#id_cliente').on('change', function() {
+        // Filtramos filas que tengan un artículo seleccionado
+        let articulosCargados = false;
+
+        inlineGroup.find('tr.dynamic-items:not(.empty-form)').each(function() {
+            // Verificar si hay valor en el select de artículo
+            if ($(this).find('select[name$="-articulo"]').val()) {
+                articulosCargados = true;
             }
         });
 
-        inlineContainer.on('input', 'input[name$="-cantidad"], input[name$="-precio_unitario_original"]', function() { actualizarCalculos(); });
-        $('#id_tipo_comprobante').on('change', function() { actualizarCalculos(); });
-
-        actualizarCalculos(); // Cálculo inicial al cargar la página.
+        if (articulosCargados) {
+            if (confirm("⚠️ Ha cambiado el cliente. ¿Desea actualizar los precios de los artículos cargados?")) {
+                inlineGroup.find('tr.dynamic-items:not(.empty-form)').each(function() {
+                    const select = $(this).find('select[name$="-articulo"]');
+                    if (select.val()) handleArticuloChange(select);
+                });
+            }
+        }
     });
-}
+
+    // E. Inicialización de columnas
+    if (inlineGroup.find('th.field-subtotal').length === 0) {
+        inlineGroup.find('thead tr').append('<th class="field-subtotal">Subtotal</th>');
+        inlineGroup.find('tbody tr.dynamic-items').append('<td class="field-subtotal"></td>');
+    }
+
+    // F. Inicialización al agregar fila
+    $(document).on('formset:added', function(event, $row, formsetName) {
+        $row.append('<td class="field-subtotal">-</td>');
+    });
+
+    // Cálculo inicial
+    actualizarCalculos();
+});
