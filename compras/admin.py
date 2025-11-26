@@ -19,28 +19,18 @@ from parametros.models import Moneda
 from ventas.services import TaxCalculatorService
 
 
-# --- FORMULARIOS PERSONALIZADOS (LÓGICA CORRECTA Y CENTRALIZADA) ---
-
+# --- CLASE FORM FIELD ---
 class CustomMoneyFormField(MoneyField):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    # EXPLICACIÓN ARQUITECTÓNICA: Este es el método que faltaba.
-    # Se ejecuta cuando el formulario se carga con datos existentes desde la base de datos.
-    # Su trabajo es "descomprimir" el objeto Money en los dos valores que el widget necesita.
     def decompress(self, value):
         if isinstance(value, Money):
-            # `value` es el objeto Money(monto, simbolo) que viene de la BD.
             try:
-                # Buscamos en nuestra tabla Moneda el objeto que corresponde al símbolo.
                 moneda = Moneda.objects.get(simbolo=value.currency.code)
-                # Devolvemos una lista: [monto, ID_de_nuestra_moneda]
                 return [value.amount, moneda.pk]
             except Moneda.DoesNotExist:
-                # Si por alguna razón la moneda de la BD no está en nuestra tabla,
-                # devolvemos el monto pero sin moneda seleccionada.
                 return [value.amount, None]
-        # Si es un formulario nuevo, no hay valores iniciales.
         return [None, None]
 
     def clean(self, value):
@@ -58,7 +48,10 @@ class CustomMoneyFormField(MoneyField):
             raise ValidationError(f"Error inesperado al procesar el costo: {e}")
 
 
+# --- FORMULARIOS ---
+
 class ComprobanteCompraItemForm(forms.ModelForm):
+    # Campo virtual unificado
     precio_costo_unitario = CustomMoneyFormField(label="Costo Unitario", required=False)
 
     class Meta:
@@ -70,9 +63,29 @@ class ComprobanteCompraItemForm(forms.ModelForm):
         choices = [(m.id, f"{m.simbolo} - {m.nombre}") for m in Moneda.objects.all()]
         self.fields['precio_costo_unitario'].widget.widgets[1].choices = choices
 
+        # Cargar valor inicial si existe
+        if self.instance.pk:
+            self.initial['precio_costo_unitario'] = self.instance.precio_costo_unitario
 
-# EXPLICACIÓN ARQUITECTÓNICA: Este formulario es la clave.
-# Centraliza la lógica de carga de monedas para CUALQUIER lugar donde se edite un ítem de lista de precios.
+    def save(self, commit=True):
+        # Lógica de mapeo inverso: Widget -> Campos del Modelo
+        instance = super().save(commit=False)
+        val_precio = self.cleaned_data.get('precio_costo_unitario')
+
+        if val_precio:
+            instance.precio_costo_unitario_monto = val_precio.amount
+            try:
+                moneda = Moneda.objects.filter(simbolo=val_precio.currency.code).first()
+                if moneda:
+                    instance.precio_costo_unitario_moneda = moneda
+            except Exception:
+                pass
+
+        if commit:
+            instance.save()
+        return instance
+
+
 class ItemListaPreciosProveedorForm(forms.ModelForm):
     precio_lista = CustomMoneyFormField(label="Precio de Lista", required=False)
 
@@ -84,13 +97,30 @@ class ItemListaPreciosProveedorForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         choices = [(m.id, f"{m.simbolo} - {m.nombre}") for m in Moneda.objects.all()]
         self.fields['precio_lista'].widget.widgets[1].choices = choices
+        if self.instance.pk:
+            self.initial['precio_lista'] = self.instance.precio_lista
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        val_precio = self.cleaned_data.get('precio_lista')
+        if val_precio:
+            instance.precio_lista_monto = val_precio.amount
+            try:
+                moneda = Moneda.objects.filter(simbolo=val_precio.currency.code).first()
+                if moneda:
+                    instance.precio_lista_moneda = moneda
+            except Exception:
+                pass
+
+        if commit:
+            instance.save()
+        return instance
 
 
 # --- INLINES Y ADMINS ---
 
 @admin.register(Proveedor)
 class ProveedorAdmin(admin.ModelAdmin):
-    # ... (sin cambios)
     list_display = ('get_razon_social', 'codigo_proveedor', 'get_cuit', 'editar_entidad_link')
     search_fields = ('entidad__razon_social', 'entidad__cuit', 'codigo_proveedor', 'nombre_fantasia')
     filter_horizontal = ('roles',)
@@ -115,17 +145,18 @@ class ProveedorAdmin(admin.ModelAdmin):
 
 
 class ComprobanteCompraItemInline(admin.TabularInline):
-    # ... (sin cambios)
     model = ComprobanteCompraItem
     form = ComprobanteCompraItemForm
     extra = 1
     autocomplete_fields = ['articulo']
-    raw_id_fields = []
+
+    # CORRECCIÓN VISUAL: Definimos explícitamente qué campos mostrar.
+    # Omitimos '_monto' y '_moneda' para que solo se vea el widget combinado 'precio_costo_unitario'
+    fields = ('articulo', 'cantidad', 'precio_costo_unitario')
 
 
 @admin.register(ComprobanteCompra)
 class ComprobanteCompraAdmin(admin.ModelAdmin):
-    # ... (sin cambios)
     change_form_template = "admin/compras/comprobantecompra/change_form.html"
     list_display = ('__str__', 'proveedor', 'fecha', 'estado', 'total')
     inlines = [ComprobanteCompraItemInline]
@@ -165,10 +196,12 @@ class ComprobanteCompraAdmin(admin.ModelAdmin):
         obj = form.instance;
         if not obj.pk: return
         moneda_base = 'ARS'
+        # Intentamos obtener la moneda del primer item guardado
         if obj.items.exists():
-            primer_item_con_moneda = obj.items.first()
-            if primer_item_con_moneda and primer_item_con_moneda.precio_costo_unitario:
-                moneda_base = primer_item_con_moneda.precio_costo_unitario.currency.code
+            primer_item = obj.items.first()
+            if primer_item.precio_costo_unitario_moneda:
+                moneda_base = primer_item.precio_costo_unitario_moneda.simbolo
+
         subtotal_calculado = sum(item.subtotal for item in obj.items.all())
         obj.subtotal = Money(subtotal_calculado.amount, moneda_base)
         desglose_impuestos = TaxCalculatorService.calcular_impuestos_comprobante(obj, 'compra')
@@ -180,14 +213,12 @@ class ComprobanteCompraAdmin(admin.ModelAdmin):
 
 class ItemListaPreciosProveedorInline(admin.TabularInline):
     model = ItemListaPreciosProveedor
-    # <<< LA CLAVE DE LA SOLUCIÓN >>>
-    # Le decimos explícitamente a este inline que use nuestro formulario personalizado.
     form = ItemListaPreciosProveedorForm
     extra = 0
     autocomplete_fields = ['articulo', 'unidad_medida_compra']
+    # También ajustamos aquí para evitar duplicados si ocurrieran
     fields = ('articulo', 'unidad_medida_compra', 'precio_lista', 'bonificacion_porcentaje', 'cantidad_minima',
               'codigo_articulo_proveedor')
-    raw_id_fields = []
 
 
 @admin.register(ListaPreciosProveedor)
@@ -201,8 +232,6 @@ class ListaPreciosProveedorAdmin(admin.ModelAdmin):
 
 @admin.register(ItemListaPreciosProveedor)
 class ItemListaPreciosProveedorAdmin(admin.ModelAdmin):
-    # <<< LA OTRA CLAVE DE LA SOLUCIÓN >>>
-    # También le decimos a la vista de edición principal que use el mismo formulario.
     form = ItemListaPreciosProveedorForm
     list_display = ('articulo', 'lista_precios', 'precio_lista')
     search_fields = ('articulo__descripcion', 'lista_precios__nombre', 'codigo_articulo_proveedor')

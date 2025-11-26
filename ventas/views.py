@@ -1,4 +1,4 @@
-# ventas/views.py (VERSIÓN FINAL CON IMPORTACIONES CORREGIDAS)
+# ventas/views.py (VERSIÓN FINAL CORREGIDA)
 
 import json
 from decimal import Decimal
@@ -10,10 +10,10 @@ from rest_framework import viewsets, status
 from rest_framework.response import Response
 from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404
-# --- INICIO DE LA CORRECCIÓN ---
-# 1. Se mueve la importación de dataclasses al bloque de importaciones superior.
 from dataclasses import asdict as dc_asdict
-# --- FIN DE LA CORRECCIÓN ---
+
+# --- CORRECCIÓN CRÍTICA: Importamos Money ---
+from djmoney.money import Money
 
 # Modelos
 from inventario.models import Articulo, StockArticulo
@@ -25,7 +25,6 @@ from .services import TaxCalculatorService, PricingService
 from .serializers import ComprobanteVentaSerializer, ComprobanteVentaCreateSerializer
 
 
-
 # --- Vistas de API para el Admin ---
 
 @staff_member_required
@@ -35,7 +34,8 @@ def get_precio_articulo(request, pk):
     """
     try:
         articulo = Articulo.objects.get(pk=pk)
-        data = {'precio': str(articulo.precio_venta.amount)}
+        # Convertimos a float/str para JSON. Usamos precio_venta_monto directamente
+        data = {'precio': str(articulo.precio_venta_monto)}
         return JsonResponse(data)
     except Articulo.DoesNotExist:
         return JsonResponse({'error': 'Artículo no encontrado'}, status=404)
@@ -55,8 +55,9 @@ def get_precio_articulo_cliente(request, cliente_pk, articulo_pk):
         data = dc_asdict(pricing_data)
 
         def format_for_json(obj):
+            # Ahora Money está importado y esto funcionará
             if isinstance(obj, Money):
-                return {'amount': f"{obj.amount:.2f}", 'currency': obj.currency.code}
+                return f"{obj.amount:.2f}"
             if isinstance(obj, Decimal):
                 return f"{obj:.2f}"
             if isinstance(obj, dict):
@@ -67,7 +68,6 @@ def get_precio_articulo_cliente(request, cliente_pk, articulo_pk):
 
         return JsonResponse(json_safe_data)
     except Exception as e:
-        # Añadimos un log para poder ver el error real en la consola del servidor
         import traceback
         traceback.print_exc()
         return JsonResponse({'error': str(e)}, status=400)
@@ -76,53 +76,72 @@ def get_precio_articulo_cliente(request, cliente_pk, articulo_pk):
 @staff_member_required
 @require_POST
 def calcular_totales_api(request):
-    # ... (Esta función no necesita cambios, pero se incluye para que el archivo esté completo)
     try:
         data = json.loads(request.body)
         items_data = data.get('items', [])
 
         class FakeItem:
-            def __init__(self, data):
-                self.articulo = Articulo.objects.get(pk=data.get('articulo'))
-                self.cantidad = Decimal(data.get('cantidad', '0'))
-                self.precio_unitario_original = Decimal(data.get('precio', '0'))
+            def __init__(self, item_data):
+                self.articulo = Articulo.objects.get(pk=item_data.get('articulo'))
+                self.cantidad = Decimal(item_data.get('cantidad', '0'))
+                # Robustez: soportar 'precio' o 'precio_monto'
+                monto_str = item_data.get('precio_monto', item_data.get('precio', '0'))
+                monto = Decimal(str(monto_str))
+                # Asumimos moneda base por ahora (ARS)
+                self.precio_unitario_original = Money(monto, 'ARS')
 
             @property
             def subtotal(self):
                 return self.cantidad * self.precio_unitario_original
 
         class FakeComprobante:
-            def __init__(self, items_data):
-                self.items_list = [FakeItem(item) for item in items_data if item.get('articulo')]
-                tipo_comprobante_id = data.get('tipo_comprobante')
-                self.tipo_comprobante = TipoComprobante.objects.get(
-                    pk=tipo_comprobante_id) if tipo_comprobante_id else None
+            def __init__(self, items_list):
+                self.items_list = items_list
+                tipo_id = data.get('tipo_comprobante')
+                self.tipo_comprobante = TipoComprobante.objects.get(pk=tipo_id) if tipo_id else None
 
             @property
             def items(self): return self
 
             def all(self): return self.items_list
 
-        fake_comprobante = FakeComprobante(items_data)
-        subtotal = sum(item.subtotal for item in fake_comprobante.all())
+        # Construimos objetos fake solo si tienen artículo válido
+        fake_items = []
+        for item in items_data:
+            if item.get('articulo'):
+                try:
+                    fake_items.append(FakeItem(item))
+                except Exception:
+                    continue  # Ignorar items mal formados
+
+        fake_comprobante = FakeComprobante(fake_items)
+
+        # Cálculos
+        subtotal = sum((item.subtotal for item in fake_items), Money(0, 'ARS'))
 
         desglose_impuestos = TaxCalculatorService.calcular_impuestos_comprobante(fake_comprobante, 'venta')
         total_impuestos = sum(desglose_impuestos.values())
-        total = subtotal + total_impuestos
+
+        total = subtotal + Money(total_impuestos, subtotal.currency)
 
         return JsonResponse({
-            'subtotal': f"{subtotal:,.2f}",
+            'subtotal': f"{subtotal.amount:,.2f}",
+            'currency_symbol': subtotal.currency.code,
             'impuestos': {k: f"{v:,.2f}" for k, v in desglose_impuestos.items()},
-            'total': f"{total:,.2f}",
+            'total': f"{total.amount:,.2f}"
         })
+
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return JsonResponse({'error': str(e)}, status=400)
 
 
-# --- ViewSet para la API REST pública ---
+# --- ViewSet para la API REST pública (DRF) ---
 
 class ComprobanteVentaViewSet(viewsets.ModelViewSet):
-    from .serializers import ComprobanteVentaSerializer, ComprobanteVentaCreateSerializer  # Importación local
+    # Importación local para evitar dependencias circulares si las hubiera
+    from .serializers import ComprobanteVentaSerializer, ComprobanteVentaCreateSerializer
 
     queryset = ComprobanteVenta.objects.all().order_by('-fecha', '-numero')
     search_fields = ['numero', 'cliente__entidad__razon_social']
@@ -151,6 +170,7 @@ class ComprobanteVentaViewSet(viewsets.ModelViewSet):
                         if not deposito_venta:
                             raise ValidationError("No se ha especificado un depósito para la venta.")
 
+                        # Bloqueo pesimista para evitar condiciones de carrera en stock
                         stock_obj = StockArticulo.objects.select_for_update().get(
                             articulo=articulo,
                             deposito=deposito_venta
@@ -158,7 +178,9 @@ class ComprobanteVentaViewSet(viewsets.ModelViewSet):
 
                         if stock_obj.cantidad < cantidad_a_descontar:
                             raise ValidationError(
-                                f"Stock insuficiente para {articulo.descripcion}. Disponible: {stock_obj.cantidad}, Solicitado: {cantidad_a_descontar}")
+                                f"Stock insuficiente para {articulo.descripcion}. "
+                                f"Disponible: {stock_obj.cantidad}, Solicitado: {cantidad_a_descontar}"
+                            )
 
                         stock_obj.cantidad -= cantidad_a_descontar
                         stock_obj.save()
@@ -169,10 +191,9 @@ class ComprobanteVentaViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Uno de los artículos en el comprobante no existe.'},
                             status=status.HTTP_400_BAD_REQUEST)
         except StockArticulo.DoesNotExist:
-            # item_data no es accesible aquí, pero podemos dar un mensaje genérico.
             return Response({
-                                'error': f"Uno de los artículos no tiene un registro de stock en el depósito especificado. Por favor, cree el registro de stock primero."},
-                            status=status.HTTP_400_BAD_REQUEST)
+                'error': "Uno de los artículos no tiene un registro de stock en el depósito especificado."
+            }, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({'error': f"Error inesperado en el servidor: {str(e)}"},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)

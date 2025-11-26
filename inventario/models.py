@@ -75,7 +75,7 @@ class Articulo(models.Model):
     precio_venta_monto = models.DecimalField(max_digits=14, decimal_places=2, default=0, verbose_name="Monto de Venta")
     precio_venta_moneda = models.ForeignKey(Moneda, on_delete=models.PROTECT, default=get_default_moneda_pk,
                                             verbose_name="Moneda de Venta", related_name='articulos_venta_moneda')
-    utilidad = models.DecimalField(max_digits=5, decimal_places=2, default=0.00,
+    utilidad = models.DecimalField(max_digits=10, decimal_places=2, default=0.00,
                                    help_text="Porcentaje de ganancia sobre el costo.", verbose_name="Utilidad (%)")
 
     # --- INICIO DE LA CORRECCIÓN ---

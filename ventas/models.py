@@ -1,26 +1,23 @@
-# ventas/models.py (VERSIÓN CON CORRECCIÓN DE IMPORTACIÓN)
-
+# ventas/models.py
 from django.db import models
 from django.db.models import Sum
 from decimal import Decimal
 from djmoney.money import Money
 
-# --- INICIO DE LA CORRECCIÓN ---
-# 1. Eliminamos la importación problemática de 'parametros.models'.
 
-# 2. Definimos la función localmente para evitar la dependencia circular.
-#    Importamos el modelo 'Moneda' aquí dentro para que se cargue cuando se necesite.
+# Función local para evitar importación circular
 def get_default_moneda_pk():
     from parametros.models import Moneda
+    # Obtenemos o creamos una moneda base por defecto
     moneda, created = Moneda.objects.get_or_create(
         es_base=True,
         defaults={'nombre': 'Peso Argentino', 'simbolo': 'ARS', 'cotizacion': 1.00}
     )
     return moneda.pk
-# --- FIN DE LA CORRECCIÓN ---
 
 
-# --- Tus modelos existentes ---
+# --- MODELOS EXISTENTES ---
+
 class Cliente(models.Model):
     entidad = models.OneToOneField('entidades.Entidad', on_delete=models.CASCADE, primary_key=True)
     price_list = models.ForeignKey(
@@ -38,14 +35,15 @@ class Cliente(models.Model):
         verbose_name = "Cliente"
         verbose_name_plural = "Clientes"
 
-# ... (El resto de tus modelos ComprobanteVenta y ComprobanteVentaItem permanecen exactamente igual) ...
+
 class ComprobanteVenta(models.Model):
     class Estado(models.TextChoices):
         BORRADOR = 'BR', 'Borrador'
         FINALIZADO = 'FN', 'Finalizado'
         ANULADO = 'AN', 'Anulado'
 
-    tipo_comprobante = models.ForeignKey('parametros.TipoComprobante', on_delete=models.PROTECT, verbose_name="Tipo de Comprobante")
+    tipo_comprobante = models.ForeignKey('parametros.TipoComprobante', on_delete=models.PROTECT,
+                                         verbose_name="Tipo de Comprobante")
     letra = models.CharField(max_length=1, editable=False)
     punto_venta = models.PositiveIntegerField(default=1, verbose_name="Punto de Venta")
     numero = models.PositiveIntegerField(verbose_name="Número")
@@ -92,18 +90,20 @@ class ComprobanteVentaItem(models.Model):
     def __str__(self):
         return f"{self.cantidad} x {self.articulo.descripcion}"
 
+
 # --- NUEVOS MODELOS PARA LISTAS DE PRECIOS DE VENTA ---
 
 class PriceList(models.Model):
     """
     Listas de precios de venta múltiples (Ej: 'Minorista', 'Mayorista', 'VIP').
     """
-    # company = models.ForeignKey('companies.Company', on_delete=models.CASCADE) # Comentado para simplificar
     name = models.CharField(max_length=100, verbose_name="Nombre")
     code = models.CharField(max_length=20, unique=True, verbose_name="Código")
     valid_from = models.DateField(verbose_name="Válido Desde", null=True, blank=True)
     valid_until = models.DateField(null=True, blank=True, verbose_name="Válido Hasta")
     is_default = models.BooleanField(default=False, verbose_name="¿Es la lista por defecto?")
+
+    # Campo para PASO 2 (Descuentos)
     discount_percentage = models.DecimalField(
         max_digits=5, decimal_places=2, default=0,
         verbose_name="Descuento general (%)"
@@ -117,12 +117,12 @@ class PriceList(models.Model):
     )
 
     class Meta:
-        # unique_together = ['company', 'code'] # Comentado para simplificar
         verbose_name = "Lista de Precios de Venta"
         verbose_name_plural = "Listas de Precios de Venta"
 
     def __str__(self):
         return self.name
+
 
 class ProductPrice(models.Model):
     """
@@ -136,7 +136,8 @@ class ProductPrice(models.Model):
     price_moneda = models.ForeignKey('parametros.Moneda', on_delete=models.PROTECT, default=get_default_moneda_pk)
 
     min_quantity = models.DecimalField(max_digits=10, decimal_places=3, default=1, verbose_name="Cantidad Mínima")
-    max_quantity = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True, verbose_name="Cantidad Máxima")
+    max_quantity = models.DecimalField(max_digits=10, decimal_places=3, null=True, blank=True,
+                                       verbose_name="Cantidad Máxima")
 
     class Meta:
         unique_together = ['product', 'price_list', 'min_quantity']

@@ -1,0 +1,74 @@
+{% extends "admin/base_site.html" %}
+{% load i18n l10n admin_urls %}
+
+{% block content %}
+<form action="" method="post">
+    {% csrf_token %}
+
+    {% for obj in queryset %}
+    <input type="hidden" name="_selected_action" value="{{ obj.pk }}" />
+    {% endfor %}
+
+    <input type="hidden" name="action" value="actualizar_precios_masivo" />
+    <input type="hidden" name="apply" value="1" />
+
+    <fieldset class="module aligned">
+        <h2>Actualización Masiva de Precios</h2>
+        <p>Seleccionados: <strong>{{ queryset.count }}</strong> precios.</p>
+
+        <div class="form-row">
+            <label for="id_metodo" class="required">Método de Actualización:</label>
+            <select name="metodo" id="id_metodo" onchange="toggleMetodos()">
+                <option value="porcentaje">Ajustar Porcentaje (Sobre precio actual)</option>
+                <option value="markup">Aplicar Markup (Sobre el Costo)</option>
+                <option value="formula">Fórmula Personalizada</option>
+            </select>
+        </div>
+
+        <div class="form-row" id="div_porcentaje">
+            <label for="id_porcentaje" class="required">Porcentaje de Ajuste (%):</label>
+            <input type="number" name="porcentaje" id="id_porcentaje" step="0.01" value="0">
+            <p class="help">Ej: 10 para aumentar un 10% el precio actual.</p>
+        </div>
+
+        <div class="form-row" id="div_markup" style="display:none;">
+            <label for="id_markup" class="required">Markup deseado (%):</label>
+            <input type="number" name="markup" id="id_markup" step="0.01" value="30">
+            <p class="help">Ej: 30 calcula: <code>Costo * 1.30</code>. Requiere que el artículo tenga costo cargado.</p>
+        </div>
+
+        <div class="form-row" id="div_formula" style="display:none;">
+            <label for="id_formula" class="required">Fórmula:</label>
+            <input type="text" name="formula" id="id_formula" style="width: 300px;">
+            <p class="help">
+                Variables disponibles: <code>costo</code>, <code>precio</code>.<br>
+                Operadores: <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>.<br>
+                Ejemplo: <code>(costo * 1.50) + 100</code>
+            </p>
+        </div>
+
+        <div class="form-row">
+             <label for="id_redondeo">Redondeo:</label>
+             <select name="redondeo" id="id_redondeo">
+                 <option value="none">Exacto (2 decimales)</option>
+                 <option value="entero">Redondear a entero (Sin decimales)</option>
+                 <option value="diez">Redondear a decena (Ej: 153 -> 150)</option>
+             </select>
+        </div>
+    </fieldset>
+
+    <div class="submit-row">
+        <input type="submit" value="Confirmar y Actualizar Precios" class="default" />
+        <a href="#" onclick="window.history.back(); return false;" class="button cancel-link">Cancelar</a>
+    </div>
+</form>
+
+<script>
+    function toggleMetodos() {
+        const metodo = document.getElementById('id_metodo').value;
+        document.getElementById('div_porcentaje').style.display = (metodo === 'porcentaje') ? 'block' : 'none';
+        document.getElementById('div_markup').style.display = (metodo === 'markup') ? 'block' : 'none';
+        document.getElementById('div_formula').style.display = (metodo === 'formula') ? 'block' : 'none';
+    }
+</script>
+{% endblock %}
