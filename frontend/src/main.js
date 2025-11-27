@@ -14,11 +14,16 @@ import { useAuthStore } from './stores/auth'
 import App from './App.vue'
 import router from './router'
 
+// --- IMPORTACIONES DE ANT DESIGN ---
+import Antd from 'ant-design-vue' // <--- NUEVO 1
+import 'ant-design-vue/dist/reset.css' // <--- NUEVO 2
+
 const app = createApp(App)
 
 app.use(createPinia())
 app.use(router)
 app.use(Toast)
+app.use(Antd) // <--- NUEVO 3: Registrar la librería
 
 // --- 2. CONFIGURACIÓN DEL INTERCEPTOR DE AXIOS ---
 // Este código se ejecutará antes de cada petición de Axios
