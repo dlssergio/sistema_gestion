@@ -158,16 +158,43 @@ class ComprobanteCompraItemInline(admin.TabularInline):
 @admin.register(ComprobanteCompra)
 class ComprobanteCompraAdmin(admin.ModelAdmin):
     change_form_template = "admin/compras/comprobantecompra/change_form.html"
-    list_display = ('__str__', 'proveedor', 'fecha', 'estado', 'total')
+    list_display = ('__str__', 'proveedor', 'fecha', 'numero_completo_display', 'estado', 'total')
+    list_filter = ('estado', 'proveedor', 'fecha', 'tipo_comprobante')
+    search_fields = ('numero', 'proveedor__entidad__razon_social')
     inlines = [ComprobanteCompraItemInline]
-    readonly_fields = ('letra', 'subtotal', 'impuestos_desglosados', 'total')
-    autocomplete_fields = ['proveedor']
+    autocomplete_fields = ['proveedor', 'serie']
+
+    # --- CAMPOS SOLO LECTURA ---
+    readonly_fields = (
+        'letra',
+        'subtotal',
+        'impuestos_desglosados',
+        'total',
+        'comprobante_origen'
+    )
+
+    # --- DISEÑO LIMPIO ---
     fieldsets = (
-        (None, {'fields': ('tipo_comprobante', 'proveedor', 'fecha', 'estado')}),
-        ('Numeración', {'fields': (('punto_venta', 'numero'),)}),
-        ('Relaciones', {'fields': ('comprobante_origen',)}),
-        ('Totales (Calculado en tiempo real)',
-         {'classes': ('collapse', 'show'), 'fields': ('subtotal', 'impuestos_desglosados', 'total')})
+        ('Documento Interno (Opcional)', {
+            'fields': ('serie',),
+            'description': 'Seleccione una serie <b>solo</b> si está generando una Orden de Compra o Devolución interna. Para cargar una factura de proveedor, deje este campo vacío.'
+        }),
+        ('Datos del Proveedor', {
+            'fields': (
+                ('proveedor', 'fecha'),
+                ('tipo_comprobante', 'estado')
+            )
+        }),
+        ('Identificación del Comprobante (Factura Física)', {
+            'fields': (
+                ('punto_venta', 'numero'),
+                'letra'
+            )
+        }),
+        ('Totales (Calculado en tiempo real)', {
+            'classes': ('show',),
+            'fields': ('subtotal', 'impuestos_desglosados', 'total')
+        })
     )
 
     class Media:
@@ -187,27 +214,41 @@ class ComprobanteCompraAdmin(admin.ModelAdmin):
     def impuestos_desglosados(self, obj):
         if not obj.impuestos: return "N/A"
         html = "<ul>";
-        for nombre, monto in obj.impuestos.items(): html += f"<li><strong>{nombre}:</strong> ${float(monto):,.2f}</li>"
-        html += "</ul>";
+        for nombre, monto in obj.impuestos.items():
+            html += f"<li><strong>{nombre}:</strong> ${float(monto):,.2f}</li>"
+        html += "</ul>"
         return format_html(html)
+
+    @admin.display(description='Número')
+    def numero_completo_display(self, obj):
+        # Reconstruimos el número completo visualmente para la lista
+        return f"{obj.letra} {obj.punto_venta:05d}-{obj.numero:08d}"
 
     def save_formset(self, request, form, formset, change):
         super().save_formset(request, form, formset, change)
-        obj = form.instance;
+        obj = form.instance
         if not obj.pk: return
         moneda_base = 'ARS'
-        # Intentamos obtener la moneda del primer item guardado
         if obj.items.exists():
             primer_item = obj.items.first()
             if primer_item.precio_costo_unitario_moneda:
                 moneda_base = primer_item.precio_costo_unitario_moneda.simbolo
 
         subtotal_calculado = sum(item.subtotal for item in obj.items.all())
-        obj.subtotal = Money(subtotal_calculado.amount, moneda_base)
+        subtotal_money = Money(subtotal_calculado.amount, moneda_base)
+
         desglose_impuestos = TaxCalculatorService.calcular_impuestos_comprobante(obj, 'compra')
         obj.impuestos = {k: str(v) for k, v in desglose_impuestos.items()}
         total_impuestos = sum(desglose_impuestos.values())
-        obj.total = obj.subtotal + Money(total_impuestos, moneda_base)
+
+        impuestos_money = Money(total_impuestos, moneda_base)
+
+        total_money = subtotal_money + impuestos_money
+
+        # ... PERO asignamos solo la parte numérica (.amount) a la base de datos
+        obj.subtotal = subtotal_money.amount
+        obj.total = total_money.amount
+
         obj.save()
 
 

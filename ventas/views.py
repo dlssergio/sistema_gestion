@@ -24,6 +24,9 @@ from parametros.models import TipoComprobante
 from .services import TaxCalculatorService, PricingService
 from .serializers import ComprobanteVentaSerializer, ComprobanteVentaCreateSerializer
 
+from django.http import HttpResponse
+from django.template.loader import render_to_string
+import weasyprint
 
 # --- Vistas de API para el Admin ---
 
@@ -201,3 +204,31 @@ class ComprobanteVentaViewSet(viewsets.ModelViewSet):
         read_serializer = ComprobanteVentaSerializer(comprobante)
         headers = self.get_success_headers(read_serializer.data)
         return Response(read_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+@staff_member_required
+def imprimir_comprobante_pdf(request, pk):
+    """
+    Genera un PDF para el comprobante de venta.
+    """
+    comprobante = get_object_or_404(ComprobanteVenta, pk=pk)
+
+    # Contexto para el template
+    context = {
+        'comprobante': comprobante,
+        'tenant': request.tenant,  # Django-tenants inyecta esto
+    }
+
+    # 1. Renderizar HTML
+    html_string = render_to_string('ventas/comprobante_pdf.html', context)
+
+    # 2. Generar PDF
+    pdf_file = weasyprint.HTML(string=html_string).write_pdf()
+
+    # 3. Devolver respuesta HTTP con el PDF
+    response = HttpResponse(pdf_file, content_type='application/pdf')
+    # 'inline' abre en el navegador, 'attachment' fuerza la descarga
+    filename = f"Comprobante_{comprobante.numero_completo}.pdf"
+    response['Content-Disposition'] = f'inline; filename="{filename}"'
+
+    return response
