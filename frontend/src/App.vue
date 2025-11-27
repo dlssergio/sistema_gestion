@@ -1,10 +1,11 @@
 <script setup>
-import { RouterLink, RouterView } from 'vue-router'
+import { RouterLink, RouterView, useRoute } from 'vue-router'
 import { useAuthStore } from './stores/auth'
 import { useRouter } from 'vue-router'
 
 const authStore = useAuthStore()
 const router = useRouter()
+const route = useRoute()
 
 const handleLogout = () => {
   authStore.logout()
@@ -13,7 +14,7 @@ const handleLogout = () => {
 </script>
 
 <template>
-  <header>
+  <header v-if="route.path !== '/ventas/pos'">
     <div class="wrapper">
       <h1>ERP System</h1>
 
@@ -22,6 +23,7 @@ const handleLogout = () => {
         <RouterLink to="/articulos">Artículos</RouterLink>
         <RouterLink to="/ventas/nuevo">Nueva Venta</RouterLink>
         <RouterLink to="/compras/nuevo">Nueva Compra</RouterLink>
+        <RouterLink to="/ventas/pos">Nueva Venta (POS)</RouterLink>
         <a @click="handleLogout" class="logout-button">Cerrar Sesión</a>
       </nav>
 

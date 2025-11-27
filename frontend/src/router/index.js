@@ -8,6 +8,7 @@ import VentaCreateView from '../views/VentaCreateView.vue'
 import CompraCreateView from '../views/CompraCreateView.vue'
 import ArticuloListView from '../views/ArticuloListView.vue'
 import ArticuloFormView from '../views/ArticuloFormView.vue'
+import VentaPOSView from '../views/ventas/VentaPOSView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -48,6 +49,12 @@ const router = createRouter({
       name: 'articulo-editar',
       component: ArticuloFormView,
       meta: { requiresAuth: true },
+    },
+    {
+      path: '/ventas/pos', // Esta será la URL para entrar
+      name: 'venta-pos',
+      component: VentaPOSView,
+      meta: { requiresAuth: false },
     },
   ],
 })
