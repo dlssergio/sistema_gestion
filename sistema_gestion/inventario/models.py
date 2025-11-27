@@ -4,43 +4,59 @@ from django.db import models, transaction
 from django.db.models import Sum, Q
 from decimal import Decimal
 from djmoney.money import Money
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.utils import timezone
+from django.conf import settings
+from .services import StockService
 
-# --- INICIO DE LA CORRECCIÓN ---
-# Se actualizan las importaciones: se elimina ReglaImpuesto y se añaden los nuevos modelos.
+from django.dispatch import receiver
+from django.db.models.signals import post_save, pre_save
+
+# Importaciones de parametros
 from parametros.models import (
     Contador, Moneda, UnidadMedida, get_default_unidad_medida,
     Impuesto, get_default_moneda_pk, GrupoUnidadMedida, CategoriaImpositiva
 )
-# --- FIN DE LA CORRECCIÓN ---
 
 
 class Marca(models.Model):
     nombre = models.CharField(max_length=100, unique=True, verbose_name="Nombre")
+
     def __str__(self): return self.nombre
+
     class Meta: verbose_name = "Marca"; verbose_name_plural = "Marcas"
+
 
 class Rubro(models.Model):
     nombre = models.CharField(max_length=100, unique=True, verbose_name="Nombre")
+
     def __str__(self): return self.nombre
+
     class Meta: verbose_name = "Rubro"; verbose_name_plural = "Rubros"
+
 
 class Deposito(models.Model):
     nombre = models.CharField(max_length=100, unique=True)
     direccion = models.CharField(max_length=255, blank=True, null=True)
     es_principal = models.BooleanField(default=False, help_text="Marcar si este es el depósito principal.")
+
     def __str__(self): return self.nombre
+
     class Meta: verbose_name = "Depósito"; verbose_name_plural = "Depósitos"
+
 
 class StockArticulo(models.Model):
     articulo = models.ForeignKey('Articulo', on_delete=models.CASCADE, related_name="stocks")
     deposito = models.ForeignKey(Deposito, on_delete=models.CASCADE)
     cantidad = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+
     def __str__(self): return f"{self.articulo.descripcion} en {self.deposito.nombre}: {self.cantidad}"
+
     class Meta:
         unique_together = ('articulo', 'deposito')
         verbose_name = "Stock por Depósito";
         verbose_name_plural = "Stocks por Depósito"
+
 
 class Articulo(models.Model):
     class Perfil(models.TextChoices):
@@ -157,7 +173,8 @@ class ProveedorArticulo(models.Model):
 
     def save(self, *args, **kwargs):
         if self.es_fuente_de_verdad:
-            ProveedorArticulo.objects.filter(articulo=self.articulo).exclude(pk=self.pk).update(es_fuente_de_verdad=False)
+            ProveedorArticulo.objects.filter(articulo=self.articulo).exclude(pk=self.pk).update(
+                es_fuente_de_verdad=False)
         super().save(*args, **kwargs)
 
     class Meta:
@@ -188,3 +205,142 @@ class ConversionUnidadMedida(models.Model):
             return f"1 {self.unidad_externa.simbolo} = {self.factor_conversion} {self.articulo.unidad_medida_stock.simbolo}"
         except:
             return "Conversión de Unidad Inválida"
+
+
+# --- MOVIMIENTOS INTERNOS DE STOCK ---
+
+class MovimientoStock(models.Model):
+    class Tipo(models.TextChoices):
+        ENTRADA = 'ENT', 'Entrada / Ajuste Positivo'
+        SALIDA = 'SAL', 'Salida / Ajuste Negativo'
+        TRANSFERENCIA = 'TRF', 'Transferencia entre Depósitos'
+
+    class Estado(models.TextChoices):
+        BORRADOR = 'BR', 'Borrador'
+        CONFIRMADO = 'CN', 'Confirmado'
+        ANULADO = 'AN', 'Anulado'
+
+    fecha = models.DateField(default=timezone.now, verbose_name="Fecha")
+
+    # La Serie nos da la numeración automática
+    serie = models.ForeignKey('parametros.SerieDocumento', on_delete=models.PROTECT,
+                              verbose_name="Serie / Concepto",
+                              help_text="Ej: 'Ajuste Inventario', 'Transferencia Sucursal 1'")
+
+    numero = models.PositiveIntegerField(verbose_name="Número", blank=True, null=True)
+
+    tipo_movimiento = models.CharField(max_length=3, choices=Tipo.choices, default=Tipo.SALIDA,
+                                       verbose_name="Tipo de Operación")
+
+    # Depósitos
+    deposito_origen = models.ForeignKey(Deposito, on_delete=models.PROTECT,
+                                        related_name='movimientos_salida',
+                                        null=True, blank=True,
+                                        verbose_name="Depósito Origen (Sale de aquí)")
+
+    deposito_destino = models.ForeignKey(Deposito, on_delete=models.PROTECT,
+                                         related_name='movimientos_entrada',
+                                         null=True, blank=True,
+                                         verbose_name="Depósito Destino (Entra aquí)")
+
+    estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.BORRADOR)
+    observaciones = models.TextField(blank=True)
+
+    stock_aplicado = models.BooleanField(default=False, editable=False)
+
+    creado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+
+    def clean(self):
+        # Validaciones lógicas
+        if self.tipo_movimiento == self.Tipo.TRANSFERENCIA:
+            if not self.deposito_origen or not self.deposito_destino:
+                raise ValidationError("En una transferencia, debe especificar Origen y Destino.")
+            if self.deposito_origen == self.deposito_destino:
+                raise ValidationError("El origen y el destino no pueden ser el mismo.")
+
+        if self.tipo_movimiento == self.Tipo.SALIDA and not self.deposito_origen:
+            raise ValidationError("Para una Salida, debe especificar el Depósito Origen.")
+
+        if self.tipo_movimiento == self.Tipo.ENTRADA and not self.deposito_destino:
+            raise ValidationError("Para una Entrada, debe especificar el Depósito Destino.")
+
+    def save(self, *args, **kwargs):
+        # 1. Numeración Automática
+        if self.serie and not self.numero and not self.serie.es_manual:
+            from parametros.models import SerieDocumento
+            with transaction.atomic():
+                serie_lock = SerieDocumento.objects.select_for_update().get(pk=self.serie.pk)
+                siguiente = serie_lock.ultimo_numero + 1
+                self.numero = siguiente
+                serie_lock.ultimo_numero = siguiente
+                serie_lock.save()
+
+        # 2. Automatización de Depósitos
+        if self.serie.deposito_defecto:
+            if self.tipo_movimiento == self.Tipo.SALIDA and not self.deposito_origen:
+                self.deposito_origen = self.serie.deposito_defecto
+            elif self.tipo_movimiento == self.Tipo.ENTRADA and not self.deposito_destino:
+                self.deposito_destino = self.serie.deposito_defecto
+
+        super().save(*args, **kwargs)
+
+    def aplicar_stock(self):
+        """Aplica el movimiento al stock físico si corresponde"""
+        # Solo aplicamos si está CONFIRMADO, no aplicado y TIENE ÍTEMS
+        if self.estado == self.Estado.CONFIRMADO and not self.stock_aplicado:
+            if not self.items.exists():
+                return  # No hay ítems, salimos (se intentará luego en save_formset)
+
+            for item in self.items.all():
+                if self.tipo_movimiento == self.Tipo.SALIDA:
+                    StockService.ajustar_stock(item.articulo, self.deposito_origen, item.cantidad, 'RESTAR')
+                elif self.tipo_movimiento == self.Tipo.ENTRADA:
+                    StockService.ajustar_stock(item.articulo, self.deposito_destino, item.cantidad, 'SUMAR')
+                elif self.tipo_movimiento == self.Tipo.TRANSFERENCIA:
+                    StockService.ajustar_stock(item.articulo, self.deposito_origen, item.cantidad, 'RESTAR')
+                    StockService.ajustar_stock(item.articulo, self.deposito_destino, item.cantidad, 'SUMAR')
+
+            # Marcamos y guardamos solo el campo booleano para eficiencia
+            self.stock_aplicado = True
+            MovimientoStock.objects.filter(pk=self.pk).update(stock_aplicado=True)
+
+    def revertir_stock(self):
+        """Revierte el movimiento de stock"""
+        if self.estado == self.Estado.ANULADO and self.stock_aplicado:
+            for item in self.items.all():
+                if self.tipo_movimiento == self.Tipo.SALIDA:
+                    StockService.ajustar_stock(item.articulo, self.deposito_origen, item.cantidad, 'SUMAR')
+                elif self.tipo_movimiento == self.Tipo.ENTRADA:
+                    StockService.ajustar_stock(item.articulo, self.deposito_destino, item.cantidad, 'RESTAR')
+                elif self.tipo_movimiento == self.Tipo.TRANSFERENCIA:
+                    StockService.ajustar_stock(item.articulo, self.deposito_origen, item.cantidad, 'SUMAR')
+                    StockService.ajustar_stock(item.articulo, self.deposito_destino, item.cantidad, 'RESTAR')
+
+            self.stock_aplicado = False
+            MovimientoStock.objects.filter(pk=self.pk).update(stock_aplicado=False)
+
+    def __str__(self):
+        return f"{self.get_tipo_movimiento_display()} #{self.numero or '?'}"
+
+    class Meta:
+        verbose_name = "Movimiento de Stock Interno"
+        verbose_name_plural = "Movimientos de Stock Internos"
+
+
+class ItemMovimientoStock(models.Model):
+    movimiento = models.ForeignKey(MovimientoStock, related_name='items', on_delete=models.CASCADE)
+    articulo = models.ForeignKey(Articulo, on_delete=models.PROTECT)
+    cantidad = models.DecimalField(max_digits=10, decimal_places=3)
+
+    def __str__(self):
+        return f"{self.cantidad} x {self.articulo.cod_articulo}"
+
+
+# --- SIGNAL PARA MOVIMIENTOS INTERNOS (Lógica Centralizada) ---
+@receiver(post_save, sender=MovimientoStock)
+def trigger_movimiento_interno(sender, instance, **kwargs):
+    # La señal actúa como disparador automático para APIs o actualizaciones directas
+    if instance.estado == MovimientoStock.Estado.CONFIRMADO:
+        instance.aplicar_stock()
+    elif instance.estado == MovimientoStock.Estado.ANULADO:
+        instance.revertir_stock()

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <title>Comprobante {{ comprobante.numero_completo }}</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm;
+        }
+        body {
+            font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+            color: #333;
+            font-size: 12px;
+        }
+        .header {
+            margin-bottom: 20px;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+        }
+        .company-info h1 {
+            margin: 0;
+            color: #2c3e50;
+        }
+        .invoice-details {
+            text-align: right;
+        }
+        .invoice-details h2 {
+            margin: 0;
+            color: #7f8c8d;
+        }
+        .client-info {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th {
+            background-color: #2c3e50;
+            color: #fff;
+            padding: 8px;
+            text-align: left;
+        }
+        td {
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+        }
+        .totals {
+            margin-top: 20px;
+            text-align: right;
+        }
+        .totals table {
+            width: 300px;
+            margin-left: auto;
+        }
+        .totals th {
+            background-color: #fff;
+            color: #333;
+            text-align: right;
+            border-bottom: 1px solid #ddd;
+        }
+        .totals .grand-total {
+            font-size: 16px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        .footer {
+            margin-top: 50px;
+            text-align: center;
+            font-size: 10px;
+            color: #777;
+            border-top: 1px solid #eee;
+            padding-top: 10px;
+        }
+        .badge {
+            background: #eee;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <table style="border: none; margin: 0;">
+            <tr>
+                <td style="border: none; width: 60%; vertical-align: top;" class="company-info">
+                    <h1>{{ tenant.name|default:"Mi Empresa" }}</h1>
+                    <p>
+                        Dirección de la Empresa<br>
+                        Teléfono: 555-1234<br>
+                        Email: contacto@empresa.com
+                    </p>
+                </td>
+                <td style="border: none; width: 40%; vertical-align: top;" class="invoice-details">
+                    <h2>{{ comprobante.tipo_comprobante.nombre|upper }}</h2>
+                    <h3>N° {{ comprobante.numero_completo }}</h3>
+                    <p>
+                        <strong>Fecha:</strong> {{ comprobante.fecha|date:"d/m/Y" }}<br>
+                        <strong>Letra:</strong> <span style="font-size: 16px; border: 1px solid #333; padding: 2px 8px;">{{ comprobante.letra }}</span>
+                    </p>
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    <div class="client-info">
+        <strong>Cliente:</strong> {{ comprobante.cliente.entidad.razon_social }}<br>
+        <strong>CUIT/DNI:</strong> {{ comprobante.cliente.entidad.cuit }}<br>
+        <strong>Dirección:</strong> {{ comprobante.cliente.entidad.domicilios.first.calle|default:"-" }}
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 10%;">Cant.</th>
+                <th style="width: 50%;">Descripción</th>
+                <th style="width: 20%; text-align: right;">Precio Unit.</th>
+                <th style="width: 20%; text-align: right;">Subtotal</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in comprobante.items.all %}
+            <tr>
+                <td>{{ item.cantidad|floatformat:2 }}</td>
+                <td>
+                    {{ item.articulo.descripcion }}
+                    <br><small style="color: #888;">{{ item.articulo.cod_articulo }}</small>
+                </td>
+                <td style="text-align: right;">${{ item.precio_unitario_original }}</td>
+                <td style="text-align: right;">${{ item.subtotal }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="totals">
+        <table>
+            <tr>
+                <th>Subtotal:</th>
+                <td>${{ comprobante.subtotal }}</td>
+            </tr>
+            {% for impuesto, monto in comprobante.impuestos.items %}
+            <tr>
+                <th>{{ impuesto }}:</th>
+                <td>${{ monto }}</td>
+            </tr>
+            {% endfor %}
+            <tr class="grand-total">
+                <th>TOTAL:</th>
+                <td>${{ comprobante.total }}</td>
+            </tr>
+        </table>
+    </div>
+
+    <div class="footer">
+        <p>Gracias por su compra - Documento generado electrónicamente por Faro ERP.</p>
+        <p>CAE: {{ comprobante.cae|default:"-" }} | Vto CAE: {{ comprobante.vto_cae|default:"-" }}</p>
+    </div>
+</body>
+</html>

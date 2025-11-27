@@ -12,6 +12,7 @@ from django.conf import settings
 
 from entidades.models import Entidad
 from parametros.models import Contador, TipoComprobante, Role, Moneda, UnidadMedida, get_default_unidad_medida
+from inventario.services import StockService
 
 
 def get_default_moneda_pk():
@@ -58,18 +59,25 @@ class Proveedor(models.Model):
 
 # --- COMPROBANTE DE COMPRA ---
 class ComprobanteCompra(models.Model):
+    # CAMBIO: Nuevo campo serie
+    serie = models.ForeignKey('parametros.SerieDocumento', on_delete=models.PROTECT,
+                              null=True, blank=True, verbose_name="Serie (Opcional)",
+                              help_text="Usar solo para comprobantes propios (Orden de Compra, Devolución). Para facturas de proveedor, dejar vacío.")
+
     proveedor = models.ForeignKey('Proveedor', on_delete=models.PROTECT, verbose_name="Proveedor")
     deposito = models.ForeignKey('inventario.Deposito', on_delete=models.PROTECT, null=True, blank=True)
 
-    class Estado(
-        models.TextChoices): BORRADOR = 'BR', 'Borrador'; FINALIZADO = 'FN', 'Finalizado'; ANULADO = 'AN', 'Anulado'
+    class Estado(models.TextChoices):
+        BORRADOR = 'BR', 'Borrador'
+        CONFIRMADO = 'CN', 'Confirmado'
+        ANULADO = 'AN', 'Anulado'
 
     tipo_comprobante = models.ForeignKey('parametros.TipoComprobante', on_delete=models.PROTECT,
                                          verbose_name="Tipo de Comprobante")
     letra = models.CharField(max_length=1, editable=False)
     punto_venta = models.PositiveIntegerField(default=1, verbose_name="Punto de Venta")
     numero = models.PositiveIntegerField(verbose_name="Número")
-    fecha = models.DateField(verbose_name="Fecha del Comprobante")
+    fecha = models.DateField(verbose_name="Fecha del Comprobante", default=timezone.now)
     estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.BORRADOR, verbose_name="Estado")
     subtotal = models.DecimalField(max_digits=15, decimal_places=2, default=0, editable=False)
     impuestos = models.JSONField(default=dict, editable=False, help_text="Desglose de impuestos")
@@ -77,13 +85,32 @@ class ComprobanteCompra(models.Model):
     comprobante_origen = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True,
                                            related_name='comprobantes_derivados')
 
-    def __str__(self): return f"{self.tipo_comprobante.nombre} de {self.proveedor}"
+    stock_aplicado = models.BooleanField(default=False, editable=False)
+
+    def __str__(self):
+        return f"{self.tipo_comprobante.nombre} de {self.proveedor}"
 
     def save(self, *args, **kwargs):
+        # Lógica de Serie (similar a ventas)
+        if self.serie:
+            self.tipo_comprobante = self.serie.tipo_comprobante
+            # Si es automático, generar número
+            if not self.serie.es_manual and not self.numero:
+                from parametros.models import SerieDocumento
+                from django.db import transaction
+                with transaction.atomic():
+                    serie_lock = SerieDocumento.objects.select_for_update().get(pk=self.serie.pk)
+                    self.numero = serie_lock.ultimo_numero + 1
+                    self.punto_venta = self.serie.punto_venta
+                    serie_lock.ultimo_numero = self.numero
+                    serie_lock.save()
+
         if self.tipo_comprobante: self.letra = self.tipo_comprobante.letra
         super().save(*args, **kwargs)
 
-    class Meta: verbose_name = "Comprobante de Compra"; verbose_name_plural = "Comprobantes de Compra"
+    class Meta:
+        verbose_name = "Comprobante de Compra";
+        verbose_name_plural = "Comprobantes de Compra"
 
 
 class ComprobanteCompraItem(models.Model):
@@ -281,3 +308,21 @@ def actualizar_costo_articulo_signal(sender, instance, created, **kwargs):
             print(">> El costo ya estaba actualizado.")
     else:
         print(">> Este proveedor NO es la fuente de verdad.")
+
+
+@receiver(post_save, sender=ComprobanteCompra)
+def aplicar_stock_compra(sender, instance, **kwargs):
+    # Si está finalizado y no aplicado
+    if instance.estado == ComprobanteCompra.Estado.CONFIRMADO and not instance.stock_aplicado:
+
+        items = instance.items.all()
+        # CORRECCIÓN CRÍTICA: Si no hay items (guardado inicial), NO hacemos nada.
+        # Esperamos al segundo guardado (save_formset) que sí tendrá items.
+        if not items.exists():
+            return
+
+        for item in items:
+            StockService.ajustar_stock(item.articulo, instance.deposito, item.cantidad, 'SUMAR')
+
+        # Ahora sí marcamos como aplicado
+        ComprobanteCompra.objects.filter(pk=instance.pk).update(stock_aplicado=True)

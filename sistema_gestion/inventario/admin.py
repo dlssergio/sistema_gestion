@@ -8,7 +8,7 @@ from djmoney.forms.fields import MoneyField
 from djmoney.money import Money
 from auditlog.registry import auditlog
 
-from .models import Articulo, Marca, Rubro, Deposito, StockArticulo, ConversionUnidadMedida, ProveedorArticulo
+from .models import Articulo, Marca, Rubro, Deposito, StockArticulo, ConversionUnidadMedida, ProveedorArticulo, MovimientoStock, ItemMovimientoStock
 from parametros.models import Moneda, Impuesto, CategoriaImpositiva
 
 
@@ -34,13 +34,14 @@ class CustomMoneyFormField(MoneyField):
 @admin.register(Marca)
 class MarcaAdmin(admin.ModelAdmin): search_fields = ['nombre']
 
-
 @admin.register(Rubro)
 class RubroAdmin(admin.ModelAdmin): search_fields = ['nombre']
 
 
-admin.site.register(Deposito)
-
+@admin.register(Deposito)
+class DepositoAdmin(admin.ModelAdmin):
+    list_display = ('nombre', 'direccion', 'es_principal')
+    search_fields = ['nombre']
 
 class ProveedorArticuloInline(admin.TabularInline):
     model = ProveedorArticulo
@@ -146,6 +147,61 @@ class ArticuloAdmin(admin.ModelAdmin):
     @admin.display(description="Precio Final con Impuestos")
     def precio_final_form(self, obj):
         return "Calculado automáticamente..."
+
+
+class ItemMovimientoStockInline(admin.TabularInline):
+    model = ItemMovimientoStock
+    extra = 1
+    autocomplete_fields = ['articulo']
+
+
+@admin.register(MovimientoStock)
+class MovimientoStockAdmin(admin.ModelAdmin):
+    list_display = ('fecha', 'serie', 'numero', 'tipo_movimiento', 'estado', 'origen_destino_display')
+    list_filter = ('estado', 'tipo_movimiento', 'fecha', 'serie')
+    search_fields = ('numero', 'observaciones')
+    inlines = [ItemMovimientoStockInline]
+    autocomplete_fields = ['serie', 'deposito_origen', 'deposito_destino']
+
+    readonly_fields = ('numero',)  # El número lo pone el sistema
+
+    fieldsets = (
+        ('Cabecera', {
+            'fields': ('fecha', 'serie', 'numero', 'estado')
+        }),
+        ('Configuración de Movimiento', {
+            'fields': ('tipo_movimiento', ('deposito_origen', 'deposito_destino'))
+        }),
+        ('Detalles', {
+            'fields': ('observaciones',)
+        }),
+    )
+
+    @admin.display(description="Origen -> Destino")
+    def origen_destino_display(self, obj):
+        origen = obj.deposito_origen.nombre if obj.deposito_origen else "N/A"
+        destino = obj.deposito_destino.nombre if obj.deposito_destino else "N/A"
+
+        if obj.tipo_movimiento == MovimientoStock.Tipo.TRANSFERENCIA:
+            return f"{origen} -> {destino}"
+        elif obj.tipo_movimiento == MovimientoStock.Tipo.ENTRADA:
+            return f"Entra a: {destino}"
+        else:
+            return f"Sale de: {origen}"
+
+    def save_model(self, request, obj, form, change):
+        if not obj.creado_por:
+            obj.creado_por = request.user
+        super().save_model(request, obj, form, change)
+
+    def save_formset(self, request, form, formset, change):
+        # 1. Guardar los ítems en la BD
+        super().save_formset(request, form, formset, change)
+
+        # 2. Ahora que los ítems existen, intentamos aplicar el stock
+        # Si el estado es CONFIRMADO, el método aplicará el stock.
+        # Si ya se aplicó antes, el método no hará nada (tiene protección interna).
+        form.instance.aplicar_stock()
 
 
 auditlog.register(Articulo)

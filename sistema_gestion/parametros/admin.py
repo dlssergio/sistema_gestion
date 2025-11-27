@@ -1,14 +1,17 @@
-# parametros/admin.py (VERSIÓN FINAL, LIMPIA Y CORRECTA)
+# parametros/admin.py
 
 from django.contrib import admin
 from .models import (
-    TipoComprobante, Contador, Pais, Provincia, Localidad, Moneda, Role,
-    GrupoUnidadMedida, UnidadMedida, CategoriaImpositiva, Impuesto
+    TipoComprobante, Contador, Moneda, Pais, Provincia, Localidad,
+    CategoriaImpositiva, Impuesto, Role, GrupoUnidadMedida, UnidadMedida,
+    SerieDocumento
 )
+
 
 @admin.register(TipoComprobante)
 class TipoComprobanteAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'letra', 'afecta_stock')
+    list_display = ('nombre', 'letra', 'codigo_afip', 'afecta_stock')
+    search_fields = ['nombre', 'codigo_afip']
 
 @admin.register(Contador)
 class ContadorAdmin(admin.ModelAdmin):
@@ -68,3 +71,24 @@ class ImpuestoAdmin(admin.ModelAdmin):
 @admin.register(CategoriaImpositiva)
 class CategoriaImpositivaAdmin(admin.ModelAdmin):
     search_fields = ('nombre',)
+
+
+@admin.register(SerieDocumento)
+class SerieDocumentoAdmin(admin.ModelAdmin):
+    list_display = ('nombre', 'tipo_comprobante', 'punto_venta', 'ultimo_numero', 'es_manual', 'activo')
+    list_filter = ('tipo_comprobante', 'es_manual', 'activo')
+    search_fields = ('nombre', 'punto_venta')
+    autocomplete_fields = ['tipo_comprobante', 'deposito_defecto']
+
+    fieldsets = (
+        ('Configuración Principal', {
+            'fields': ('nombre', 'tipo_comprobante', 'punto_venta', 'activo')
+        }),
+        ('Numeración', {
+            'fields': ('ultimo_numero', 'es_manual'),
+            'description': 'El sistema sumará 1 al último número automáticamente al emitir, a menos que sea manual.'
+        }),
+        ('Automatización', {
+            'fields': ('deposito_defecto',)
+        }),
+    )
