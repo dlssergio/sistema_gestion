@@ -155,3 +155,21 @@ def calcular_totales_compra_api(request):
         import traceback
         traceback.print_exc()
         return JsonResponse({'error': str(e)}, status=400)
+
+
+@staff_member_required
+def get_comprobante_info(request, pk):
+    """
+    Devuelve saldo y total de un comprobante para autocompletar la Orden de Pago.
+    """
+    try:
+        comp = ComprobanteCompra.objects.get(pk=pk)
+        return JsonResponse({
+            'saldo': str(comp.saldo_pendiente),
+            'total': str(comp.total),
+            'id': comp.pk
+        })
+    except ComprobanteCompra.DoesNotExist:
+        return JsonResponse({'error': 'Comprobante no encontrado'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)

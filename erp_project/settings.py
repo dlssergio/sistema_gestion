@@ -57,6 +57,7 @@ TENANT_APPS = [
     'entidades',
     'parametros',
     'ventas',
+    'finanzas',
     'guardian',
 ]
 

@@ -1,31 +1,45 @@
-# ventas/admin.py (VERSIÓN CORREGIDA Y FINAL)
+# ventas/admin.py (VERSIÓN FINAL DEFINITIVA)
 
 from auditlog.registry import auditlog
 from django.contrib import admin
 from django.urls import reverse, path
 from django.utils.html import format_html
 from django.http import HttpResponseRedirect
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.contrib import messages
+from django.utils import timezone
 from decimal import Decimal, ROUND_HALF_UP
+from djmoney.money import Money
 
-from .models import Cliente, ComprobanteVenta, ComprobanteVentaItem, PriceList, ProductPrice
-# Importamos la vista de impresión PDF
-from .views import get_precio_articulo, calcular_totales_api, get_precio_articulo_cliente, imprimir_comprobante_pdf
+from .models import (
+    Cliente, ComprobanteVenta, ComprobanteVentaItem,
+    PriceList, ProductPrice,
+    Recibo, ReciboImputacion, ReciboValor
+)
+# Importamos todas las vistas necesarias
+from .views import (
+    get_precio_articulo, calcular_totales_api,
+    get_precio_articulo_cliente, imprimir_comprobante_pdf,
+    get_comprobante_venta_info
+)
 from .services import TaxCalculatorService
+from .views import reporte_cuenta_corriente
 
 
 @admin.register(Cliente)
 class ClienteAdmin(admin.ModelAdmin):
-    list_display = ('get_razon_social', 'get_cuit', 'editar_entidad_link')
+    list_display = ('get_razon_social', 'get_cuit', 'editar_entidad_link', 'permite_cta_cte', 'boton_cta_cte')
     search_fields = ('entidad__razon_social', 'entidad__cuit')
     autocomplete_fields = ['price_list']
+    actions = ['generar_recibo_cobranza']
 
-    def get_razon_social(self, obj): return obj.entidad.razon_social
+    def get_razon_social(self, obj):
+        return obj.entidad.razon_social
 
     get_razon_social.short_description = 'Razón Social'
 
-    def get_cuit(self, obj): return obj.entidad.cuit
+    def get_cuit(self, obj):
+        return obj.entidad.cuit
 
     get_cuit.short_description = 'CUIT'
 
@@ -39,6 +53,59 @@ class ClienteAdmin(admin.ModelAdmin):
         url = reverse('admin:entidades_entidad_add') + '?rol=cliente'
         return HttpResponseRedirect(url)
 
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path('<int:cliente_pk>/cta-cte/',
+                 self.admin_site.admin_view(reporte_cuenta_corriente),
+                 name='ventas_cliente_ctacte'),
+        ]
+        return custom_urls + urls
+
+    @admin.display(description="Cta. Cte.")
+    def boton_cta_cte(self, obj):
+        url = reverse('admin:ventas_cliente_ctacte', args=[obj.pk])
+        return format_html('<a class="button" href="{}" target="_blank">📜 Ver Cta Cte</a>', url)
+
+    @admin.action(description="💰 Generar Recibo de Cobro (Cargar Pendientes)")
+    def generar_recibo_cobranza(self, request, queryset):
+        if queryset.count() > 1:
+            self.message_user(request, "Por favor, seleccione solo un cliente para cobrar.", level=messages.WARNING)
+            return
+
+        cliente = queryset.first()
+        # Buscamos comprobantes confirmados con saldo pendiente > 0
+        pendientes = ComprobanteVenta.objects.filter(
+            cliente=cliente,
+            estado=ComprobanteVenta.Estado.CONFIRMADO,
+            saldo_pendiente__gt=0
+        )
+
+        if not pendientes.exists():
+            self.message_user(request, f"El cliente {cliente} no tiene deuda pendiente.", level=messages.INFO)
+            return
+
+        # Creamos el recibo borrador (ahora Recibo permite serie null, así que no falla)
+        recibo = Recibo.objects.create(
+            cliente=cliente,
+            fecha=timezone.now(),
+            estado=Recibo.Estado.BORRADOR,
+            creado_por=request.user
+        )
+
+        # Creamos las imputaciones automáticamente
+        for comprobante in pendientes:
+            ReciboImputacion.objects.create(
+                recibo=recibo,
+                comprobante=comprobante,
+                monto_imputado=comprobante.saldo_pendiente
+            )
+
+        url = reverse('admin:ventas_recibo_change', args=[recibo.pk])
+        self.message_user(request,
+                          f"Recibo generado con {pendientes.count()} facturas pendientes. Cargue los valores de pago.")
+        return redirect(url)
+
 
 class ComprobanteVentaItemInline(admin.TabularInline):
     model = ComprobanteVentaItem
@@ -50,22 +117,19 @@ class ComprobanteVentaItemInline(admin.TabularInline):
 @admin.register(ComprobanteVenta)
 class ComprobanteVentaAdmin(admin.ModelAdmin):
     change_form_template = "admin/ventas/comprobanteventa/change_form.html"
-    list_display = ('numero_completo', 'cliente', 'fecha', 'estado', 'total', 'serie', 'boton_imprimir_lista')
-    list_filter = ('estado', 'cliente', 'fecha', 'tipo_comprobante', 'serie')
+    list_display = (
+        'numero_completo', 'cliente', 'fecha', 'condicion_venta', 'total', 'saldo_visual', 'estado_pago_visual',
+        'boton_imprimir_lista')
+    list_filter = ('estado', 'cliente', 'fecha', 'condicion_venta', 'serie')
     search_fields = ('numero', 'cliente__entidad__razon_social')
     inlines = [ComprobanteVentaItemInline]
     autocomplete_fields = ['cliente', 'serie']
 
     # Campos de solo lectura (incluyendo el botón de imprimir)
     readonly_fields = (
-        'tipo_comprobante',
-        'letra',
-        'punto_venta',
-        'numero',
-        'subtotal',
-        'impuestos_desglosados',
-        'total',
-        'boton_imprimir_detalle'  # Campo virtual para el formulario
+        'tipo_comprobante', 'letra', 'punto_venta', 'numero',
+        'subtotal', 'impuestos_desglosados', 'total',
+        'saldo_pendiente', 'boton_imprimir_detalle'
     )
 
     # Organización visual del formulario
@@ -73,66 +137,102 @@ class ComprobanteVentaAdmin(admin.ModelAdmin):
         ('Encabezado de Venta', {
             'fields': (
                 ('serie', 'fecha'),
-                ('cliente', 'estado'),
-                'boton_imprimir_detalle'  # Aquí mostramos el botón
+                ('cliente', 'condicion_venta'),
+                ('estado', 'boton_imprimir_detalle')
             )
         }),
-        ('Detalles Técnicos (Generado Automáticamente)', {
+        ('Detalles Técnicos', {
             'classes': ('collapse',),
             'fields': ('tipo_comprobante', 'letra', 'punto_venta', 'numero')
         }),
         ('Totales', {
             'classes': ('show',),
-            'fields': ('subtotal', 'impuestos_desglosados', 'total')
+            'fields': ('subtotal', 'impuestos_desglosados', 'total', 'saldo_pendiente')
         })
     )
 
     class Media:
         js = ('admin/js/comprobante_venta_admin.js',)
 
-    # 1. Registro de URLs personalizadas (APIs y PDF)
     def get_urls(self):
         urls = super().get_urls()
-        custom_urls = [
+        return [
             path('api/get-precio-articulo/<str:pk>/',
                  self.admin_site.admin_view(get_precio_articulo),
-                 name='pricelist_get_precio_articulo'),
+                 name='ventas_get_precio_articulo'),
             path('api/get-precio-articulo-cliente/<int:cliente_pk>/<str:articulo_pk>/',
                  self.admin_site.admin_view(get_precio_articulo_cliente),
                  name='ventas_get_precio_articulo_cliente'),
             path('api/calcular-totales/',
                  self.admin_site.admin_view(calcular_totales_api),
                  name='ventas_calcular_totales_api'),
-            # Nueva URL para imprimir
             path('<int:pk>/imprimir/',
                  self.admin_site.admin_view(imprimir_comprobante_pdf),
                  name='ventas_comprobanteventa_imprimir'),
-        ]
-        return custom_urls + urls
+            path('api/get-comprobante-info/<int:pk>/',
+                 self.admin_site.admin_view(get_comprobante_venta_info),
+                 name='ventas_get_comprobante_info')
+        ] + urls
 
-    # 2. Botón para la LISTA de comprobantes (columna extra)
-    @admin.display(description="Acciones")
+    # --- Lógica de Redirección Contado ---
+    def response_add(self, request, obj, post_url_continue=None):
+        return self._redirect_if_contado(request, obj) or super().response_add(request, obj, post_url_continue)
+
+    def response_change(self, request, obj):
+        return self._redirect_if_contado(request, obj) or super().response_change(request, obj)
+
+    def _redirect_if_contado(self, request, obj):
+        """Si es Contado y tiene saldo, redirigir al cobro inmediato"""
+        if obj.condicion_venta == ComprobanteVenta.CondicionVenta.CONTADO and obj.saldo_pendiente > 0 and obj.estado == ComprobanteVenta.Estado.CONFIRMADO:
+            # Crear recibo automático
+            recibo = Recibo.objects.create(
+                cliente=obj.cliente,
+                fecha=obj.fecha,
+                estado=Recibo.Estado.BORRADOR,
+                creado_por=request.user,
+                origen=Recibo.Origen.CONTADO
+            )
+            # Imputar esta factura
+            ReciboImputacion.objects.create(
+                recibo=recibo,
+                comprobante=obj,
+                monto_imputado=obj.saldo_pendiente
+            )
+
+            self.message_user(request, "⚠️ Venta CONTADO registrada. Por favor ingrese los valores de pago.",
+                              level=messages.WARNING)
+            return redirect(reverse('admin:ventas_recibo_change', args=[recibo.pk]))
+        return None
+
+    # --- Visuales y Botones ---
+
+    @admin.display(description="Saldo", ordering='saldo_pendiente')
+    def saldo_visual(self, obj):
+        color = "red" if obj.saldo_pendiente > 0 else "green"
+        return format_html('<span style="color: {}; font-weight: bold;">${}</span>', color, obj.saldo_pendiente)
+
+    @admin.display(description="Estado")
+    def estado_pago_visual(self, obj):
+        estado = obj.estado_pago
+        colors = {'PAGADO': 'green', 'IMPAGO': 'red', 'PARCIAL': 'orange'}
+        return format_html(
+            '<span style="background:{}; color:white; padding:3px 6px; border-radius:4px; font-size:10px;">{}</span>',
+            colors.get(estado, 'gray'), estado)
+
+    @admin.display(description="PDF")
     def boton_imprimir_lista(self, obj):
         if obj.pk:
             url = reverse('admin:ventas_comprobanteventa_imprimir', args=[obj.pk])
-            return format_html(
-                '<a class="button" href="{}" target="_blank" title="Imprimir Comprobante">🖨️ PDF</a>',
-                url
-            )
+            return format_html('<a class="button" href="{}" target="_blank" title="Imprimir">🖨️</a>', url)
         return "-"
 
-    # 3. Botón para el DETALLE del comprobante (dentro del formulario)
     @admin.display(description="Imprimir")
     def boton_imprimir_detalle(self, obj):
         if obj.pk:
             url = reverse('admin:ventas_comprobanteventa_imprimir', args=[obj.pk])
-            return format_html(
-                '<a class="button" style="background-color: #417690; color: white; padding: 5px 10px; border-radius: 4px; text-decoration: none;" href="{}" target="_blank">🖨️ Generar PDF</a>',
-                url
-            )
+            return format_html('<a class="button" href="{}" target="_blank">🖨️ Generar PDF</a>', url)
         return "(Guarde para imprimir)"
 
-    # 4. Mostrar impuestos formateados
     @admin.display(description='Impuestos')
     def impuestos_desglosados(self, obj):
         if not obj.impuestos: return "N/A"
@@ -142,31 +242,57 @@ class ComprobanteVentaAdmin(admin.ModelAdmin):
         html += "</ul>"
         return format_html(html)
 
-    # 5. Guardado con cálculo de totales
+    # --- Filtro Inteligente ---
+    def get_search_results(self, request, queryset, search_term):
+        queryset, use_distinct = super().get_search_results(request, queryset, search_term)
+        # Si nos buscan desde un Recibo, filtrar solo impagos
+        if 'app_label' in request.GET and request.GET['model_name'] == 'reciboimputacion':
+            queryset = queryset.filter(estado=ComprobanteVenta.Estado.CONFIRMADO, saldo_pendiente__gt=0)
+
+            # Filtro opcional por cliente si el JS lo enviara (futuro)
+            cliente_id = request.GET.get('cliente_id')
+            if cliente_id:
+                queryset = queryset.filter(cliente_id=cliente_id)
+
+        return queryset, use_distinct
+
     def save_formset(self, request, form, formset, change):
         super().save_formset(request, form, formset, change)
         obj = form.instance
         if not obj.pk: return
 
-        # Cálculo robusto de totales
+        moneda_base = 'ARS'  # Simplificado, idealmente leer del primer item
+        if obj.items.exists() and obj.items.first().articulo.precio_venta_moneda:
+            moneda_base = obj.items.first().articulo.precio_venta_moneda.simbolo
+
+        # Cálculo robusto de totales usando Money para precisión
         subtotal_calculado = sum(item.subtotal for item in obj.items.all())
-        obj.subtotal = subtotal_calculado.quantize(Decimal('0.01'))
+        # Aseguramos que sea Money
+        if not isinstance(subtotal_calculado, Money):
+            subtotal_calculado = Money(subtotal_calculado, moneda_base)
 
         desglose_impuestos = TaxCalculatorService.calcular_impuestos_comprobante(obj, 'venta')
         obj.impuestos = {k: str(v) for k, v in desglose_impuestos.items()}
 
-        total_impuestos = sum(desglose_impuestos.values())
-        obj.total = obj.subtotal + total_impuestos
+        total_impuestos_decimal = sum(desglose_impuestos.values())
+        impuestos_money = Money(total_impuestos_decimal, moneda_base)
+
+        total_money = subtotal_calculado + impuestos_money
+
+        # Asignación de valores Decimales (.amount) a los campos del modelo
+        obj.subtotal = subtotal_calculado.amount
+        obj.total = total_money.amount
+
+        # CORRECCIÓN CRÍTICA: Asignación directa (sin .amount) para el saldo
+        # Porque obj.total YA es un Decimal aquí
+        obj.saldo_pendiente = obj.total
+
         obj.save()
 
 
 # --- CONFIGURACIÓN DE LISTAS DE PRECIOS Y PRODUCTOS (SIN CAMBIOS) ---
 
 class ProductPriceInline(admin.TabularInline):
-    """
-    Este inline nos permite añadir y editar precios de artículos
-    directamente DENTRO de la página de una Lista de Precios.
-    """
     model = ProductPrice
     extra = 1
     autocomplete_fields = ['product', 'price_moneda']
@@ -183,9 +309,6 @@ class ProductPriceInline(admin.TabularInline):
 
 @admin.register(PriceList)
 class PriceListAdmin(admin.ModelAdmin):
-    """
-    Administrador para el modelo principal de Listas de Precios de Venta.
-    """
     list_display = ('name', 'code', 'is_default', 'valid_from', 'valid_until')
     search_fields = ('name', 'code')
     inlines = [ProductPriceInline]
@@ -205,11 +328,7 @@ class PriceListAdmin(admin.ModelAdmin):
 
 @admin.register(ProductPrice)
 class ProductPriceAdmin(admin.ModelAdmin):
-    """
-    Administrador para ver todos los precios de productos de forma individual.
-    Útil para búsquedas y filtros avanzados.
-    """
-    list_display = ('product', 'price_list', 'price', 'min_quantity', 'actualizado_hace')
+    list_display = ('product', 'price_list', 'price', 'min_quantity')
     list_filter = ('price_list', 'product__rubro', 'product__marca')
     search_fields = ('product__descripcion', 'product__cod_articulo', 'price_list__name')
     autocomplete_fields = ['product', 'price_list', 'price_moneda']
@@ -219,16 +338,16 @@ class ProductPriceAdmin(admin.ModelAdmin):
     def actualizado_hace(self, obj):
         return "-"
 
+    # --- TU LÓGICA DE ACTUALIZACIÓN MASIVA ---
     @admin.action(description="📈 Actualizar precios seleccionados (Masivo)")
     def actualizar_precios_masivo(self, request, queryset):
-        # ... (TU LÓGICA DE ACTUALIZACIÓN MASIVA SE MANTIENE INTACTA AQUÍ) ...
-        # He copiado el código que me pasaste para mantenerlo
         if 'apply' in request.POST:
             try:
                 metodo = request.POST.get('metodo')
                 tipo_redondeo = request.POST.get('redondeo')
                 actualizados = 0
                 errores = 0
+
                 factor_porcentaje = 1
                 factor_markup = 1
                 formula_str = ""
@@ -256,13 +375,20 @@ class ProductPriceAdmin(admin.ModelAdmin):
                         elif metodo == 'formula':
                             costo = float(precio_obj.product.precio_costo_monto)
                             precio_actual = float(precio_obj.price_monto)
-                            contexto = {'costo': costo, 'precio': precio_actual, 'abs': abs, 'min': min, 'max': max}
+
+                            contexto = {
+                                'costo': costo,
+                                'precio': precio_actual,
+                                'abs': abs, 'min': min, 'max': max
+                            }
                             resultado = eval(formula_str, {"__builtins__": None}, contexto)
                             nuevo_monto = Decimal(str(resultado))
+
                     except Exception as e:
                         errores += 1
                         continue
 
+                    # Redondeo
                     if tipo_redondeo == 'entero':
                         nuevo_monto = nuevo_monto.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
                     elif tipo_redondeo == 'diez':
@@ -276,6 +402,7 @@ class ProductPriceAdmin(admin.ModelAdmin):
 
                 mensaje = f"✅ Se actualizaron {actualizados} precios."
                 if errores > 0: mensaje += f" ⚠️ Hubo {errores} errores."
+
                 self.message_user(request, mensaje)
                 return HttpResponseRedirect(request.get_full_path())
 
@@ -286,6 +413,92 @@ class ProductPriceAdmin(admin.ModelAdmin):
             'queryset': queryset,
             'title': 'Actualización Masiva de Precios'
         })
+
+
+# --- RECIBOS DE COBRO (TESORERÍA) ---
+
+class ReciboImputacionInline(admin.TabularInline):
+    model = ReciboImputacion
+    extra = 1
+    autocomplete_fields = ['comprobante']
+
+    # Campos visibles y readonly para el total original
+    fields = ('comprobante', 'total_original_display', 'monto_imputado')
+    readonly_fields = ('total_original_display',)
+
+    def total_original_display(self, obj):
+        if obj.comprobante:
+            return f"${obj.comprobante.total:,.2f}"
+        return "-"
+
+    total_original_display.short_description = "Total Original"
+
+
+class ReciboValorInline(admin.TabularInline):
+    model = ReciboValor
+    extra = 1
+    autocomplete_fields = ['destino', 'banco_origen']
+    # Aquí NO va total_original_display
+
+
+@admin.register(Recibo)
+class ReciboAdmin(admin.ModelAdmin):
+    list_display = ('numero', 'cliente', 'fecha', 'monto_total', 'estado', 'finanzas_aplicadas')
+    list_filter = ('estado', 'fecha')
+    search_fields = ('numero', 'cliente__entidad__razon_social')
+    autocomplete_fields = ['cliente', 'serie']
+    inlines = [ReciboImputacionInline, ReciboValorInline]
+    readonly_fields = ('numero', 'finanzas_aplicadas', 'monto_total', 'creado_por')
+
+    fieldsets = (
+        ('Encabezado', {'fields': ('serie', 'fecha', 'cliente', 'estado')}),
+        ('Auditoría', {'fields': ('creado_por', 'finanzas_aplicadas', 'observaciones')})
+    )
+
+    class Media:
+        js = ('admin/js/recibo_admin.js',)
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path('api/get-comprobante-info/<int:pk>/',
+                 self.admin_site.admin_view(get_comprobante_venta_info),
+                 name='ventas_get_comprobante_info'),
+        ]
+        return custom_urls + urls
+
+    def save_model(self, request, obj, form, change):
+        if not obj.pk: obj.creado_por = request.user
+        super().save_model(request, obj, form, change)
+
+    def save_formset(self, request, form, formset, change):
+        super().save_formset(request, form, formset, change)
+        if form.instance.pk:
+            total = sum(v.monto for v in form.instance.valores.all())
+            form.instance.monto_total = total
+            form.instance.save()
+
+    # --- EL MÉTODO QUE FALTABA PARA QUE FUNCIONE SIN ERRORES ---
+    def save_related(self, request, form, formsets, change):
+        """
+        Ejecuta la aplicación financiera AL FINAL, cuando los inlines ya existen.
+        """
+        super().save_related(request, form, formsets, change)
+
+        obj = form.instance
+        if obj.estado == Recibo.Estado.CONFIRMADO and not obj.finanzas_aplicadas:
+            try:
+                obj.aplicar_finanzas()
+                self.message_user(request, "✅ Recibo aplicado con éxito.")
+            except Exception as e:
+                # Si falla la validación (desbalance), volvemos a borrador
+                obj.estado = Recibo.Estado.BORRADOR
+                obj.save()
+                self.message_user(request, f"❌ No se pudo confirmar: {e}", level=messages.ERROR)
+
+        if obj.estado == Recibo.Estado.ANULADO and obj.finanzas_aplicadas:
+            obj.revertir_finanzas()
+            self.message_user(request, "⚠️ Recibo ANULADO. Saldos revertidos.")
 
 
 auditlog.register(ComprobanteVenta)
