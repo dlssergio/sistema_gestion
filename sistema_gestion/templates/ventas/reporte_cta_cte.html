@@ -1,0 +1,83 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block extrahead %}
+{{ block.super }}
+<style>
+    .cta-cte-table { width: 100%; border-collapse: collapse; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    .cta-cte-table th { background: #417690; color: white; padding: 10px; text-align: left; }
+    .cta-cte-table td { padding: 10px; border-bottom: 1px solid #eee; }
+    .cta-cte-table tr:hover { background: #f5f5f5; }
+    .monto-debe { color: #c0392b; font-weight: bold; text-align: right; }
+    .monto-haber { color: #27ae60; font-weight: bold; text-align: right; }
+    .saldo-col { font-weight: bold; text-align: right; background: #f9f9f9; }
+    .saldo-positivo { color: #c0392b; } /* Debe plata */
+    .saldo-negativo { color: #27ae60; } /* A favor */
+    .header-info { padding: 20px; background: #fff; margin-bottom: 20px; border-left: 5px solid #417690; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="header-info">
+    <h1>🗂️ Cuenta Corriente: {{ cliente.entidad.razon_social }}</h1>
+    <p><strong>CUIT:</strong> {{ cliente.entidad.cuit }} | <strong>Fecha Emisión:</strong> {{ hoy|date:"d/m/Y" }}</p>
+    <h2 style="margin-top: 10px;">
+        Saldo Actual:
+        <span class="{% if saldo_final > 0 %}saldo-positivo{% else %}saldo-negativo{% endif %}">
+            $ {{ saldo_final|floatformat:2 }}
+        </span>
+    </h2>
+</div>
+
+<table class="cta-cte-table">
+    <thead>
+        <tr>
+            <th>Fecha</th>
+            <th>Tipo</th>
+            <th>Comprobante</th>
+            <th style="text-align: right;">Debe (Facturado)</th>
+            <th style="text-align: right;">Haber (Pagado)</th>
+            <th style="text-align: right;">Saldo Acumulado</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% if not movimientos %}
+        <tr><td colspan="6" style="text-align:center; padding: 20px;">Sin movimientos en Cuenta Corriente.</td></tr>
+        {% endif %}
+
+        {% for mov in movimientos %}
+        <tr>
+            <td>{{ mov.fecha|date:"d/m/Y" }}</td>
+            <td>
+                {# CORRECCIÓN: Usamos 'tipo_doc' en lugar de 'tipo' #}
+                <span class="badge" style="background: {% if mov.tipo_doc == 'Factura' %}#666{% else %}#27ae60{% endif %}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">
+                    {{ mov.tipo_doc|upper }}
+                </span>
+            </td>
+            <td>
+                {# Construimos el número completo porque la vista manda las partes sueltas #}
+                <strong>{{ mov.letra }}</strong>
+                {{ mov.punto_venta|stringformat:"05d" }}-{{ mov.numero|stringformat:"08d" }}
+            </td>
+            <td class="monto-debe">
+                {# CORRECCIÓN: Usamos 'monto_debe' #}
+                {% if mov.monto_debe > 0 %}$ {{ mov.monto_debe|floatformat:2 }}{% else %}-{% endif %}
+            </td>
+            <td class="monto-haber">
+                {# CORRECCIÓN: Usamos 'monto_haber' #}
+                {% if mov.monto_haber > 0 %}$ {{ mov.monto_haber|floatformat:2 }}{% else %}-{% endif %}
+            </td>
+            <td class="saldo-col">
+                {# CORRECCIÓN: Usamos 'saldo_acumulado' #}
+                $ {{ mov.saldo_acumulado|floatformat:2 }}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div class="submit-row" style="margin-top: 20px;">
+    <a href="#" onclick="window.print(); return false;" class="button">🖨️ Imprimir Reporte</a>
+    <a href="javascript:history.back()" class="button" style="background: #666;">Volver</a>
+</div>
+{% endblock %}
