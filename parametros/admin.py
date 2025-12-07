@@ -4,8 +4,9 @@ from django.contrib import admin
 from .models import (
     TipoComprobante, Contador, Moneda, Pais, Provincia, Localidad,
     CategoriaImpositiva, Impuesto, Role, GrupoUnidadMedida, UnidadMedida,
-    SerieDocumento
+    SerieDocumento, ConfiguracionEmpresa
 )
+
 
 
 @admin.register(TipoComprobante)
@@ -92,3 +93,13 @@ class SerieDocumentoAdmin(admin.ModelAdmin):
             'fields': ('deposito_defecto',)
         }),
     )
+
+
+@admin.register(ConfiguracionEmpresa)
+class ConfiguracionEmpresaAdmin(admin.ModelAdmin):
+    list_display = ('nombre_fantasia', 'entidad', 'ingresos_brutos')
+    # Ocultar el botón "Añadir" si ya existe uno, para forzar el Singleton visualmente
+    def has_add_permission(self, request):
+        if self.model.objects.exists():
+            return False
+        return super().has_add_permission(request)

@@ -1,12 +1,15 @@
 # parametros/views.py (VERSIÓN FINAL Y ROBUSTA)
 
 from rest_framework import viewsets
-# --- INICIO DE LA CORRECCIÓN ---
-# Se importa Moneda, TipoComprobante, y los NUEVOS modelos de impuestos.
-# Se elimina la importación del obsoleto 'ReglaImpuesto'.
-from .models import Moneda, TipoComprobante, Impuesto, CategoriaImpositiva
-from .serializers import MonedaSerializer, TipoComprobanteSerializer, ImpuestoSerializer, CategoriaImpositivaSerializer
-# --- FIN DE LA CORRECCIÓN ---
+from .models import Moneda, TipoComprobante, Impuesto, CategoriaImpositiva, ConfiguracionEmpresa
+from .serializers import (
+    MonedaSerializer, TipoComprobanteSerializer, ImpuestoSerializer,
+    CategoriaImpositivaSerializer, ConfiguracionEmpresaSerializer
+)
+from rest_framework.views import APIView
+from rest_framework.response import Response
+
+
 
 class MonedaViewSet(viewsets.ModelViewSet):
     """
@@ -36,3 +39,16 @@ class CategoriaImpositivaViewSet(viewsets.ModelViewSet):
     """
     queryset = CategoriaImpositiva.objects.all()
     serializer_class = CategoriaImpositivaSerializer
+
+
+class ConfiguracionEmpresaView(APIView):
+    """
+    Devuelve la configuración de la empresa actual.
+    Si no existe, devuelve vacío o un error controlado.
+    """
+    def get(self, request):
+        config = ConfiguracionEmpresa.objects.first()
+        if config:
+            serializer = ConfiguracionEmpresaSerializer(config)
+            return Response(serializer.data)
+        return Response({"detail": "Empresa no configurada"}, status=404)

@@ -35,7 +35,6 @@ ALLOWED_HOSTS = ['localhost', '127.0.0.1', '.localhost']
 SHARED_APPS = [
     'django_tenants',  # Debe ser la primera
     'companies',       # Nuestra nueva app para gestionar los tenants (clientes)
-
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -48,6 +47,7 @@ SHARED_APPS = [
     'rest_framework_simplejwt',
     'corsheaders',
     'auditlog',
+    'storages',
 ]
 
 TENANT_APPS = [
@@ -202,3 +202,32 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE # Usamos la misma zona horaria que Django
+
+# --- CONFIGURACIÓN DE ALMACENAMIENTO (S3 / MINIO) - VERSIÓN DJANGO 5+ ---
+USE_S3 = True
+
+# Variables globales para que boto3 las encuentre
+AWS_ACCESS_KEY_ID = 'minioadmin'
+AWS_SECRET_ACCESS_KEY = 'minioadminpassword'
+AWS_STORAGE_BUCKET_NAME = 'erp-media-local'
+AWS_S3_ENDPOINT_URL = 'http://localhost:9000'
+AWS_S3_CUSTOM_DOMAIN = 'localhost:9000/erp-media-local'
+AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
+AWS_S3_SIGNATURE_VERSION = 's3v4'
+AWS_S3_FILE_OVERWRITE = False
+AWS_QUERYSTRING_AUTH = False
+
+if USE_S3:
+    print("--- CARGANDO CONFIGURACIÓN S3/MINIO (MODO DJANGO 5) ---")
+
+    STORAGES = {
+        # Almacenamiento "default" (para los archivos subidos, media)
+        "default": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+        },
+        # Almacenamiento "staticfiles" (para css, js del admin)
+        # Lo mantenemos local para no complicar el desarrollo
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }

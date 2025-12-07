@@ -219,3 +219,50 @@ class SerieDocumento(models.Model):
         verbose_name_plural = "Series de Documentos (Talonarios)"
         # Evitamos duplicar el mismo tipo legal en el mismo punto de venta
         unique_together = ['tipo_comprobante', 'punto_venta']
+
+
+# --- CONFIGURACIÓN DE LA EMPRESA (SINGLETON) ---
+
+class ConfiguracionEmpresa(models.Model):
+    """
+    Datos fiscales y de configuración visual de la empresa (Tenant).
+    Solo puede existir UNA instancia por cliente.
+    """
+    # Vinculamos a una Entidad para reutilizar CUIT, Dirección, etc.
+    entidad = models.OneToOneField(
+        'entidades.Entidad',
+        on_delete=models.PROTECT,
+        verbose_name="Entidad Fiscal"
+    )
+
+    # Datos visuales
+    logo = models.ImageField(upload_to='logos_empresa/', null=True, blank=True)
+    nombre_fantasia = models.CharField(max_length=200, help_text="Nombre comercial para el ticket")
+
+    # Datos fiscales adicionales no cubiertos en Entidad
+    inicio_actividades = models.DateField(verbose_name="Inicio de Actividades")
+    ingresos_brutos = models.CharField(max_length=50, verbose_name="N° Ingresos Brutos")
+
+    # Configuración operativa
+    moneda_principal = models.ForeignKey(
+        'Moneda',
+        on_delete=models.PROTECT,
+        related_name='configuracion_principal'
+    )
+
+    class Meta:
+        verbose_name = "Configuración de Empresa"
+        verbose_name_plural = "Configuración de Empresa"
+
+    def __str__(self):
+        return f"Configuración: {self.nombre_fantasia}"
+
+    def clean(self):
+        """Valida que no exista ya una configuración creada (Singleton)."""
+        model = self.__class__
+        if not self.pk and model.objects.exists():
+            raise ValidationError("Ya existe una Configuración para esta empresa. Solo se permite una.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()  # Llama al clean() antes de guardar
+        super().save(*args, **kwargs)
