@@ -211,7 +211,12 @@ AWS_ACCESS_KEY_ID = 'minioadmin'
 AWS_SECRET_ACCESS_KEY = 'minioadminpassword'
 AWS_STORAGE_BUCKET_NAME = 'erp-media-local'
 AWS_S3_ENDPOINT_URL = 'http://localhost:9000'
-AWS_S3_CUSTOM_DOMAIN = 'localhost:9000/erp-media-local'
+
+# --- CORRECCIÓN CRÍTICA ---
+AWS_S3_URL_PROTOCOL = 'http:'  # 1. Forzamos HTTP aquí
+AWS_S3_CUSTOM_DOMAIN = 'localhost:9000/erp-media-local' # 2. Quitamos el protocolo de aquí (dominio limpio)
+AWS_S3_USE_SSL = False # 3. Le decimos a boto3 que no intente usar SSL
+
 AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
 AWS_S3_SIGNATURE_VERSION = 's3v4'
 AWS_S3_FILE_OVERWRITE = False
