@@ -2,13 +2,19 @@
 
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import ArticuloViewSet, MarcaViewSet, RubroViewSet
+from .views import (
+    ArticuloViewSet,
+    MarcaViewSet,
+    RubroViewSet,
+    CategoriaImpositivaViewSet
+)
 
 # El router se encarga de generar las URLs para el ViewSet automáticamente
 router = DefaultRouter()
 router.register(r'articulos', ArticuloViewSet, basename='articulo')
 router.register(r'marcas', MarcaViewSet, basename='marca')
 router.register(r'rubros', RubroViewSet, basename='rubro')
+router.register(r'categorias-impositivas', CategoriaImpositivaViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),

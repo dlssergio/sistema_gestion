@@ -8,6 +8,7 @@ from .serializers import (
 )
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.permissions import AllowAny
 
 
 
@@ -46,6 +47,8 @@ class ConfiguracionEmpresaView(APIView):
     Devuelve la configuración de la empresa actual.
     Si no existe, devuelve vacío o un error controlado.
     """
+    permission_classes = [AllowAny]
+
     def get(self, request):
         config = ConfiguracionEmpresa.objects.first()
         if config:

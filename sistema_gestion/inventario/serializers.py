@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from djmoney.contrib.django_rest_framework import MoneyField
-from .models import Articulo, Marca, Rubro
+from .models import Articulo, Marca, Rubro, CategoriaImpositiva
 # <<< CAMBIO CLAVE: Eliminamos la importación de 'Impuesto' >>>
 
 class MarcaSerializer(serializers.ModelSerializer):
@@ -11,6 +11,11 @@ class MarcaSerializer(serializers.ModelSerializer):
 class RubroSerializer(serializers.ModelSerializer):
     class Meta:
         model = Rubro
+        fields = '__all__'
+
+class CategoriaImpositivaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CategoriaImpositiva
         fields = '__all__'
 
 class ArticuloCreateUpdateSerializer(serializers.ModelSerializer):
@@ -32,6 +37,8 @@ class ArticuloSerializer(serializers.ModelSerializer):
     marca = MarcaSerializer(read_only=True)
     rubro = RubroSerializer(read_only=True)
 
+    id = serializers.ReadOnlyField(source='pk')
+
     precio_costo = serializers.SerializerMethodField()
     precio_venta = MoneyField(max_digits=12, decimal_places=2, read_only=True)
     precio_final_calculado = serializers.SerializerMethodField()
@@ -40,8 +47,9 @@ class ArticuloSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Articulo
-        # <<< CAMBIO CLAVE: Eliminamos 'impuesto' de la lista de campos >>>
+        # Ahora sí podemos incluir 'id' en la lista
         fields = [
+            'id',
             'cod_articulo', 'descripcion', 'ean', 'marca', 'rubro',
             'stock_total', 'precio_costo', 'precio_venta', 'utilidad',
             'precio_final_calculado', 'administra_stock', 'esta_activo'

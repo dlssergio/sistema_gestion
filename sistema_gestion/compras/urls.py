@@ -1,10 +1,11 @@
-# en compras/urls.py (NUEVO ARCHIVO)
-
 from rest_framework.routers import DefaultRouter
-from .views import ComprobanteCompraViewSet
+from django.urls import path, include
+from .views import ComprobanteCompraViewSet, ProveedorViewSet
 
-# El router se encarga de todo, igual que en las otras apps
 router = DefaultRouter()
 router.register(r'comprobantes-compra', ComprobanteCompraViewSet, basename='comprobantecompra')
+router.register(r'proveedores', ProveedorViewSet)
 
-# No necesitamos urlpatterns aquí, solo exportar el router
+urlpatterns = [
+    path('', include(router.urls)),
+]

@@ -68,7 +68,6 @@ INSTALLED_APPS = SHARED_APPS + TENANT_APPS
 MIDDLEWARE = [
     # <<< AÑADIDO >>> El middleware de tenants debe ser el primero
     'django_tenants.middleware.main.TenantMainMiddleware',
-
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
@@ -163,13 +162,41 @@ STATICFILES_DIRS = [
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # --- Configuración de CORS ---
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
-# <<< AÑADIDO >>> Permitir CORS para los subdominios de los tenants
+#CORS_ALLOWED_ORIGINS = [
+#    "http://localhost:5173",
+#    "http://127.0.0.1:5173",
+#]
+# --- NUEVA CONFIGURACIÓN CORS DINÁMICA ---
+
+# Permitir credenciales (cookies/tokens)
+CORS_ALLOW_CREDENTIALS = True
+
+# Permitir localhost:5173 y cualquier subdominio (tenant.localhost:5173)
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^http://\w+\.localhost:5173$",
+    r"^http://localhost:5173$",
+    r"^http://127\.0\.0\.1:5173$",
+    r"^http://.*\.localhost:5173$",  # <--- ESTA ES LA CLAVE: Cualquier subdominio
+]
+
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]
+
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
 ]
 
 
@@ -211,7 +238,12 @@ AWS_ACCESS_KEY_ID = 'minioadmin'
 AWS_SECRET_ACCESS_KEY = 'minioadminpassword'
 AWS_STORAGE_BUCKET_NAME = 'erp-media-local'
 AWS_S3_ENDPOINT_URL = 'http://localhost:9000'
-AWS_S3_CUSTOM_DOMAIN = 'localhost:9000/erp-media-local'
+
+# --- CORRECCIÓN CRÍTICA ---
+AWS_S3_URL_PROTOCOL = 'http:'  # 1. Forzamos HTTP aquí
+AWS_S3_CUSTOM_DOMAIN = 'localhost:9000/erp-media-local' # 2. Quitamos el protocolo de aquí (dominio limpio)
+AWS_S3_USE_SSL = False # 3. Le decimos a boto3 que no intente usar SSL
+
 AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
 AWS_S3_SIGNATURE_VERSION = 's3v4'
 AWS_S3_FILE_OVERWRITE = False

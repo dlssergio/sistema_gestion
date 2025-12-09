@@ -108,6 +108,19 @@ class Articulo(models.Model):
                                          verbose_name="Proveedores Relacionados")
     administra_stock = models.BooleanField(default=True, verbose_name="¿Administra Stock?")
     esta_activo = models.BooleanField(default=True, verbose_name="¿Está Activo?")
+    foto = models.ImageField(
+        upload_to='productos/',
+        null=True,
+        blank=True,
+        verbose_name="Foto del Producto"
+    )
+    ubicacion = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        verbose_name="Ubicación Física",
+        help_text="Ej: Pasillo 4, Estantería B"
+    )
     observaciones = models.TextField(blank=True, null=True, verbose_name="Observaciones")
     nota = models.TextField(blank=True, null=True, verbose_name="Nota Interna")
 

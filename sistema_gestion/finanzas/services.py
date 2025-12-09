@@ -1,6 +1,8 @@
-from django.db.models import Sum, F
+from django.db.models import Sum
+from django.db.models.functions import TruncDay
 from django.utils import timezone
 from decimal import Decimal
+import json
 
 # Modelos
 from finanzas.models import CuentaFondo, Cheque
@@ -12,15 +14,14 @@ class DashboardService:
     @staticmethod
     def get_metricas_financieras():
         hoy = timezone.now()
+        # Primer día del mes actual
         inicio_mes = hoy.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        # 1. LIQUIDEZ ACTUAL (Caja + Bancos)
-        # Sumamos el saldo de todas las cuentas activas
+        # --- 1. KPIs ESCALARES (Lo que ya tenías) ---
         liquidez = CuentaFondo.objects.filter(activa=True).aggregate(
             total=Sum('saldo_monto')
         )['total'] or Decimal(0)
 
-        # 2. A COBRAR (Deuda Clientes + Cheques en Cartera)
         deuda_clientes = ComprobanteVenta.objects.filter(
             estado=ComprobanteVenta.Estado.CONFIRMADO,
             saldo_pendiente__gt=0
@@ -32,36 +33,44 @@ class DashboardService:
 
         a_cobrar = deuda_clientes + cheques_cartera
 
-        # 3. A PAGAR (Deuda Proveedores)
         a_pagar = ComprobanteCompra.objects.filter(
             estado=ComprobanteCompra.Estado.CONFIRMADO,
             saldo_pendiente__gt=0
         ).aggregate(total=Sum('saldo_pendiente'))['total'] or Decimal(0)
 
-        # 4. RESULTADO DEL MES (Estimado)
-        # Ventas del mes (Total facturado)
         ventas_mes = ComprobanteVenta.objects.filter(
             estado=ComprobanteVenta.Estado.CONFIRMADO,
             fecha__gte=inicio_mes
         ).aggregate(total=Sum('total'))['total'] or Decimal(0)
 
-        # Costo de Mercadería Vendida (Aproximado usando costo actual)
-        # Nota: Para precisión contable exacta se requeriría historizar costos,
-        # pero esto es excelente para un tablero de control rápido.
-        items_vendidos = ComprobanteVenta.objects.filter(
+        # --- 2. DATOS PARA GRÁFICOS (Evolución de Ventas) ---
+        # Agrupamos ventas por día del mes actual
+        ventas_diarias = ComprobanteVenta.objects.filter(
             estado=ComprobanteVenta.Estado.CONFIRMADO,
             fecha__gte=inicio_mes
-        ).values_list('items__cantidad', 'items__articulo__precio_costo_monto')
+        ).annotate(dia=TruncDay('fecha')).values('dia').annotate(total=Sum('total')).order_by('dia')
 
-        costo_mes = sum(cant * costo for cant, costo in items_vendidos if cant and costo)
+        # Preparamos arrays para Chart.js
+        labels = []
+        data = []
 
-        resultado_mes = ventas_mes - costo_mes
+        if ventas_diarias:
+            for v in ventas_diarias:
+                # Formato día: "08/12"
+                labels.append(v['dia'].strftime("%d/%m"))
+                data.append(float(v['total']))
+        else:
+            # Si no hay ventas, mostramos el día de hoy en cero
+            labels.append(hoy.strftime("%d/%m"))
+            data.append(0)
 
         return {
             'liquidez': liquidez,
             'a_cobrar': a_cobrar,
             'a_pagar': a_pagar,
-            'resultado_mes': resultado_mes,
-            'ventas_mes': ventas_mes,  # Dato extra útil
-            'cheques_cartera': cheques_cartera  # Dato extra útil
+            'ventas_mes': ventas_mes,
+            'cheques_cartera': cheques_cartera,
+            # Datos serializados para JS
+            'chart_labels': json.dumps(labels),
+            'chart_data': json.dumps(data)
         }
