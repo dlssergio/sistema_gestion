@@ -1,4 +1,4 @@
-# compras/services.py (VERSIÓN FINAL CON LÓGICA DE BÚSQUEDA)
+# sistema_gestion/compras/services.py (VERSIÓN ENTERPRISE - HÍBRIDA)
 
 from decimal import Decimal
 from djmoney.money import Money
@@ -6,13 +6,63 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Q
 from django.utils import timezone
 
-# Importamos los modelos necesarios aquí
+# Modelos
 from .models import ListaPreciosProveedor, ItemListaPreciosProveedor, Proveedor
 from inventario.models import ConversionUnidadMedida, Articulo
 
 
+class PriceListService:
+    """
+    Servicio encargado EXCLUSIVAMENTE de seleccionar la lista de precios correcta.
+    Separa la lógica de selección (Cuál lista) de la lógica de cálculo (Cuánto cuesta).
+    """
+
+    @staticmethod
+    def get_active_price_item(proveedor, articulo, cantidad=Decimal(1), fecha=None):
+        """
+        Busca el ítem de precio vigente para un artículo y proveedor.
+        Prioridad:
+        1. Lista Principal Vigente
+        2. Otras Listas Activas Vigentes (la más reciente)
+        """
+        if fecha is None:
+            fecha = timezone.now().date()
+
+        # 1. Buscar en la lista principal activa y vigente
+        lista_principal = ListaPreciosProveedor.objects.filter(
+            proveedor=proveedor, es_principal=True, es_activa=True,
+            vigente_desde__lte=fecha
+        ).filter(Q(vigente_hasta__isnull=True) | Q(vigente_hasta__gte=fecha)).first()
+
+        if lista_principal:
+            item = ItemListaPreciosProveedor.objects.filter(
+                lista_precios=lista_principal, articulo=articulo, cantidad_minima__lte=cantidad
+            ).order_by('-cantidad_minima').first()
+            if item:
+                return item
+
+        # 2. Si no se encontró, buscar en CUALQUIER otra lista activa y vigente
+        otras_listas = ListaPreciosProveedor.objects.filter(
+            proveedor=proveedor, es_principal=False, es_activa=True,
+            vigente_desde__lte=fecha
+        ).filter(Q(vigente_hasta__isnull=True) | Q(vigente_hasta__gte=fecha)).order_by('-vigente_desde')
+
+        for lista in otras_listas:
+            item = ItemListaPreciosProveedor.objects.filter(
+                lista_precios=lista, articulo=articulo, cantidad_minima__lte=cantidad
+            ).order_by('-cantidad_minima').first()
+            if item:
+                return item
+
+        return None
+
+
 class CostCalculatorService:
-    # ... (el método apply_cascading_discounts se mantiene igual) ...
+    """
+    Servicio de Cálculo Financiero.
+    Mantiene la lógica existente para no romper integraciones previas.
+    """
+
     @staticmethod
     def apply_cascading_discounts(base_amount: Decimal, discount_list: list) -> Decimal:
         final_amount = base_amount
@@ -57,40 +107,16 @@ class CostCalculatorService:
     @classmethod
     def get_latest_price(cls, proveedor_pk: int, articulo_pk: str, cantidad: Decimal = Decimal(1)):
         """
-        MÉTODO ACTUALIZADO: Busca el precio usando la nueva lógica de listas de precios.
+        MÉTODO ACTUALIZADO (Fachada):
+        Usa PriceListService para buscar el ítem correcto, pero mantiene la firma
+        para que las vistas actuales sigan funcionando sin cambios.
         """
         try:
             proveedor = Proveedor.objects.get(pk=proveedor_pk)
             articulo = Articulo.objects.get(pk=articulo_pk)
-            fecha = timezone.now().date()
 
-            # 1. Buscar en la lista principal activa y vigente
-            lista_principal = ListaPreciosProveedor.objects.filter(
-                proveedor=proveedor, es_principal=True, es_activa=True,
-                vigente_desde__lte=fecha
-            ).filter(Q(vigente_hasta__isnull=True) | Q(vigente_hasta__gte=fecha)).first()
-
-            if lista_principal:
-                item = ItemListaPreciosProveedor.objects.filter(
-                    lista_precios=lista_principal, articulo=articulo, cantidad_minima__lte=cantidad
-                ).order_by('-cantidad_minima').first()
-                if item:
-                    return item
-
-            # 2. Si no se encontró, buscar en CUALQUIER otra lista activa y vigente
-            otras_listas = ListaPreciosProveedor.objects.filter(
-                proveedor=proveedor, es_principal=False, es_activa=True,
-                vigente_desde__lte=fecha
-            ).filter(Q(vigente_hasta__isnull=True) | Q(vigente_hasta__gte=fecha)).order_by('-vigente_desde')
-
-            for lista in otras_listas:
-                item = ItemListaPreciosProveedor.objects.filter(
-                    lista_precios=lista, articulo=articulo, cantidad_minima__lte=cantidad
-                ).order_by('-cantidad_minima').first()
-                if item:
-                    return item
-
-            return None  # Si no se encuentra en ninguna lista, no hay precio.
+            # Delegamos la búsqueda al nuevo servicio especializado
+            return PriceListService.get_active_price_item(proveedor, articulo, cantidad)
 
         except (Proveedor.DoesNotExist, Articulo.DoesNotExist):
             return None

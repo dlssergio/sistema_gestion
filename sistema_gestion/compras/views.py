@@ -1,27 +1,106 @@
-# compras/views.py (VERSIÓN CORREGIDA Y ROBUSTA)
+# sistema_gestion/compras/views.py
 
 import json
 from decimal import Decimal
 from django.http import JsonResponse
+from django.db import transaction
+from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_POST
 from django.contrib.admin.views.decorators import staff_member_required
 from djmoney.money import Money
-from rest_framework import viewsets
-from django.shortcuts import get_object_or_404
+from rest_framework import viewsets, status, filters
+from rest_framework.response import Response
+from django.core.exceptions import ValidationError
 
 # --- Modelos ---
-from .models import ComprobanteCompra
-from inventario.models import Articulo
+from .models import ComprobanteCompra, ComprobanteCompraItem, Proveedor
+from inventario.models import Articulo, StockArticulo, Deposito  # Asegúrate de importar Deposito
 from parametros.models import Moneda, TipoComprobante
+
+# --- Serializers ---
+from .serializers import (
+    ComprobanteCompraSerializer,
+    ComprobanteCompraCreateSerializer
+)
 
 # --- Servicios ---
 from ventas.services import TaxCalculatorService
 from compras.services import CostCalculatorService
 
+from entidades.serializers import ProveedorSerializer
 
 class ComprobanteCompraViewSet(viewsets.ModelViewSet):
-    queryset = ComprobanteCompra.objects.all().order_by('-fecha', '-numero')
+    queryset = ComprobanteCompra.objects.all().order_by('-fecha', '-id')
 
+    def get_serializer_class(self):
+        # Usamos el serializer complejo para leer y el simple para escribir
+        if self.action in ['create', 'update', 'partial_update']:
+            return ComprobanteCompraCreateSerializer
+        return ComprobanteCompraSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            with transaction.atomic():
+                # 1. Separar datos de items y cabecera
+                items_data = serializer.validated_data.pop('items')
+                datos_compra = serializer.validated_data
+
+                # 2. Crear Cabecera
+                compra = ComprobanteCompra.objects.create(**datos_compra)
+
+                total_acumulado = Decimal(0)
+
+                # 3. Procesar Ítems
+                for item_data in items_data:
+                    # Crear el ítem
+                    item_creado = ComprobanteCompraItem.objects.create(comprobante=compra, **item_data)
+
+                    # Sumar al total (simple suma de subtotales por ahora)
+                    # Nota: item_creado.subtotal se calcula en el save() del modelo si lo tienes configurado,
+                    # o podemos calcularlo aqui. Asumimos que el modelo lo hace o usamos cantidad * precio.
+                    subtotal_linea = item_creado.cantidad * item_creado.precio_costo_unitario.amount
+                    total_acumulado += subtotal_linea
+
+                    # 4. IMPACTO EN STOCK (Si está confirmado)
+                    if compra.estado == ComprobanteCompra.Estado.CONFIRMADO:  # Asegúrate que tu modelo tenga Estado.CONFIRMADO o usa 'CN'
+                        articulo = item_creado.articulo
+                        cantidad = item_creado.cantidad
+
+                        # Definir depósito (Por defecto Central si no se especifica en la lógica)
+                        # Aquí podrías agregar un campo 'deposito' al modelo ComprobanteCompra si no existe
+                        deposito = Deposito.objects.filter(es_principal=True).first()
+
+                        if deposito:
+                            stock_obj, _ = StockArticulo.objects.get_or_create(
+                                articulo=articulo,
+                                deposito=deposito,
+                                defaults={'cantidad': 0}
+                            )
+                            stock_obj.cantidad += cantidad  # AUMENTA el stock
+                            stock_obj.save()
+
+                # 5. Actualizar Total del Comprobante
+                # Asignamos la moneda del primer item o ARS por defecto
+                moneda = 'ARS'
+                if items_data:
+                    moneda = items_data[0]['precio_costo_unitario'].currency
+
+                compra.total = Money(total_acumulado, moneda)
+                compra.saldo_pendiente = compra.total  # Asumimos cuenta corriente inicial
+                compra.save()
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Devolvemos el objeto creado con el serializer de lectura (para ver los detalles completos)
+        read_serializer = ComprobanteCompraSerializer(compra)
+        return Response(read_serializer.data, status=status.HTTP_201_CREATED)
+
+
+# --- TUS VISTAS AUXILIARES EXISTENTES (Se mantienen igual para no romper Admin) ---
 
 @staff_member_required
 def get_precio_proveedor_json(request, proveedor_pk, articulo_pk):
@@ -151,6 +230,7 @@ def calcular_totales_compra_api(request):
             'impuestos': {k: f"{v:,.2f}" for k, v in desglose_impuestos.items()},
             'total': f"{total.amount:,.2f}",
         })
+
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -167,9 +247,15 @@ def get_comprobante_info(request, pk):
         return JsonResponse({
             'saldo': str(comp.saldo_pendiente),
             'total': str(comp.total),
-            'id': comp.pk
-        })
+            'id': comp.pk})
     except ComprobanteCompra.DoesNotExist:
         return JsonResponse({'error': 'Comprobante no encontrado'}, status=404)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+
+
+class ProveedorViewSet(viewsets.ModelViewSet):
+    queryset = Proveedor.objects.all().order_by('entidad__razon_social')
+    serializer_class = ProveedorSerializer
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['entidad__razon_social', 'entidad__cuit', 'nombre_fantasia']

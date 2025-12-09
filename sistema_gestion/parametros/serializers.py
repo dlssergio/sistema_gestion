@@ -4,6 +4,7 @@ from rest_framework import serializers
 from .models import Moneda, TipoComprobante, Impuesto, CategoriaImpositiva, ConfiguracionEmpresa
 from entidades.serializers import EntidadSerializer
 
+
 class MonedaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Moneda

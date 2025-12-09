@@ -17,6 +17,12 @@ from parametros.serializers import TipoComprobanteSerializer
 class ComprobanteCompraItemCreateSerializer(serializers.ModelSerializer):
     articulo = serializers.PrimaryKeyRelatedField(queryset=Articulo.objects.all())
 
+    precio_costo_unitario = serializers.DecimalField(
+        source='precio_costo_unitario_monto',
+        max_digits=14,
+        decimal_places=4
+    )
+
     class Meta:
         model = ComprobanteCompraItem
         fields = ['articulo', 'cantidad', 'precio_costo_unitario']
@@ -61,3 +67,4 @@ class ComprobanteCompraSerializer(serializers.ModelSerializer):
     class Meta:
         model = ComprobanteCompra
         fields = ['id', 'numero_completo', 'proveedor', 'fecha', 'estado', 'total', 'tipo_comprobante', 'items']
+

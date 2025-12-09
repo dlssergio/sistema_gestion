@@ -43,11 +43,12 @@ class CategoriaImpositivaViewSet(viewsets.ModelViewSet):
 
 
 class ConfiguracionEmpresaView(APIView):
-    permission_classes = [AllowAny]
     """
     Devuelve la configuración de la empresa actual.
     Si no existe, devuelve vacío o un error controlado.
     """
+    permission_classes = [AllowAny]
+
     def get(self, request):
         config = ConfiguracionEmpresa.objects.first()
         if config:

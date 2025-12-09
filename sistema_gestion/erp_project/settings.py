@@ -68,7 +68,6 @@ INSTALLED_APPS = SHARED_APPS + TENANT_APPS
 MIDDLEWARE = [
     # <<< AÑADIDO >>> El middleware de tenants debe ser el primero
     'django_tenants.middleware.main.TenantMainMiddleware',
-
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
@@ -163,13 +162,41 @@ STATICFILES_DIRS = [
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # --- Configuración de CORS ---
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
-# <<< AÑADIDO >>> Permitir CORS para los subdominios de los tenants
+#CORS_ALLOWED_ORIGINS = [
+#    "http://localhost:5173",
+#    "http://127.0.0.1:5173",
+#]
+# --- NUEVA CONFIGURACIÓN CORS DINÁMICA ---
+
+# Permitir credenciales (cookies/tokens)
+CORS_ALLOW_CREDENTIALS = True
+
+# Permitir localhost:5173 y cualquier subdominio (tenant.localhost:5173)
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^http://\w+\.localhost:5173$",
+    r"^http://localhost:5173$",
+    r"^http://127\.0\.0\.1:5173$",
+    r"^http://.*\.localhost:5173$",  # <--- ESTA ES LA CLAVE: Cualquier subdominio
+]
+
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]
+
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
 ]
 
 

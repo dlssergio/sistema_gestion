@@ -83,7 +83,7 @@ class ArticuloAdmin(admin.ModelAdmin):
     # --- CORRECCIÓN FINAL: Usamos los nombres EXPLÍCITOS del modelo ---
     fieldsets = (
         ('Información Principal',
-         {'fields': ('cod_articulo', 'ean', 'qr', 'descripcion', 'perfil', 'marca', 'rubro', 'esta_activo')}),
+         {'fields': ('cod_articulo', 'ean', 'qr', 'descripcion', 'foto', 'ubicacion', 'perfil', 'marca', 'rubro', 'esta_activo')}),
         ('Precios, Costos e Impuestos',
          {'fields': (
              # Tupla para mostrar en la misma línea
