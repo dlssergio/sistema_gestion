@@ -1,11 +1,10 @@
 # en entidades/serializers.py (CORREGIDO OTRA VEZ)
 
 from rest_framework import serializers
-# Corregimos las importaciones para que cada modelo venga de su app correcta.
-# 'Entidad' y 'SituacionIVA' vienen del 'models.py' de esta misma app.
 from .models import Entidad, SituacionIVA
 from ventas.models import Cliente
 from compras.models import Proveedor
+
 
 class SituacionIVASerializer(serializers.ModelSerializer):
     class Meta:
@@ -29,14 +28,16 @@ class ClienteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Cliente
-        fields = ['entidad']
+        fields = ['id', 'entidad']
 
 class ProveedorSerializer(serializers.ModelSerializer):
     entidad = EntidadSerializer(read_only=True)
+    id = serializers.ReadOnlyField(source='pk')
 
     class Meta:
         model = Proveedor
         fields = [
+            'id',
             'entidad',
             'codigo_proveedor',
             'nombre_fantasia'

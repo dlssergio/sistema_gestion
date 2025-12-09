@@ -15,6 +15,9 @@ urlpatterns = [
     # La URL final será /api/get-precio-articulo/...
     path('get-precio-articulo/<str:pk>/', views.get_precio_articulo, name='get_precio_articulo'),
 
+    # --- NUEVA RUTA PARA PDF ---
+    path('comprobantes-venta/<int:pk>/pdf/', views.generar_pdf_venta_api, name='venta_pdf_api'),
+
     # El router principal se incluye sin prefijo
     path('', include(router.urls)),
 ]
