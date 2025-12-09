@@ -23,7 +23,8 @@ export const useAuthStore = defineStore('auth', () => {
   async function login(username, password) {
     try {
       // Hacemos la petición al endpoint /api/token/ que creamos en Django
-      const response = await axios.post('http://127.0.0.1:8000/api/token/', {
+      // Antes decía 127.0.0.1 o demo.localhost
+      const response = await axios.post('http://tenant1.localhost:8000/api/token/', {
         username: username,
         password: password,
       })
