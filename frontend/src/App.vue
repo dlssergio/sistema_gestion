@@ -1,73 +1,43 @@
 <script setup>
-import { RouterLink, RouterView, useRoute } from 'vue-router'
-import { useAuthStore } from './stores/auth'
-import { useRouter } from 'vue-router'
+import { onMounted } from 'vue'
+import { RouterView } from 'vue-router'
+import { useConfigStore } from './stores/config'
 
-const authStore = useAuthStore()
-const router = useRouter()
-const route = useRoute()
+const configStore = useConfigStore()
 
-const handleLogout = () => {
-  authStore.logout()
-  router.push('/login')
-}
+onMounted(async () => {
+  // Intentamos cargar configuración (logo, nombre) si es posible
+  try {
+    await configStore.cargarConfiguracion()
+  } catch (e) {}
+})
 </script>
 
 <template>
-  <header v-if="route.path !== '/ventas/pos'">
-    <div class="wrapper">
-      <h1>ERP System</h1>
-
-      <nav v-if="authStore.isAuthenticated">
-        <RouterLink to="/">Inicio</RouterLink>
-        <RouterLink to="/articulos">Artículos</RouterLink>
-        <RouterLink to="/ventas/nuevo">Nueva Venta</RouterLink>
-        <RouterLink to="/compras/nuevo">Nueva Compra</RouterLink>
-        <RouterLink to="/ventas/pos">Nueva Venta (POS)</RouterLink>
-        <a @click="handleLogout" class="logout-button">Cerrar Sesión</a>
-      </nav>
-
-      <nav v-else>
-        <RouterLink to="/login">Iniciar Sesión</RouterLink>
-      </nav>
-    </div>
-  </header>
   <RouterView />
 </template>
 
-<style scoped>
-header {
-  line-height: 1.5;
-  max-height: 100vh;
-  border-bottom: 1px solid #ccc;
-  padding: 1rem;
-}
-h1 {
-  font-weight: bold;
-}
-nav {
+<style>
+html,
+body {
+  margin: 0 !important;
+  padding: 0 !important;
+  height: 100%;
   width: 100%;
-  font-size: 1rem;
-  text-align: left;
-  margin-top: 1rem;
-}
-nav a {
-  display: inline-block;
-  padding: 0 1rem;
-  border-left: 1px solid var(--color-border);
-}
-nav a:first-of-type {
-  border: 0;
-  padding-left: 0;
+  font-family:
+    'Inter',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+  background-color: #f0f2f5; /* Color de fondo base del admin */
+  overflow-x: hidden; /* Evita scroll horizontal innecesario */
 }
 
-/* Estilo para el botón de logout para que parezca un enlace */
-.logout-button {
-  cursor: pointer;
-  color: var(--color-text);
-  text-decoration: underline;
-}
-.logout-button:hover {
-  color: var(--color-heading);
+#app {
+  height: 100%;
 }
 </style>
