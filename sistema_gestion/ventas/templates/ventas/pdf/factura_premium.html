@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <title>Comprobante {{ comprobante.numero_completo }}</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 1cm;
+            margin-bottom: 3.5cm; /* Espacio reservado para el footer fijo */
+
+            /* Paginación Automática Correcta para WeasyPrint */
+            @bottom-right {
+                content: "Página " counter(page) " de " counter(pages);
+                font-family: Helvetica, Arial, sans-serif;
+                font-size: 9pt;
+                color: #666;
+                margin-bottom: 10px;
+                margin-right: 1cm;
+            }
+        }
+
+        body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            color: #333;
+            font-size: 10pt;
+            line-height: 1.3;
+        }
+
+        /* --- ESTILOS GENERALES --- */
+        :root {
+            --primary: #2c3e50;
+            --secondary: #f4f6f7;
+            --border: #bdc3c7;
+        }
+
+        .header-wrapper {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            height: 190px;
+            position: relative;
+            margin-bottom: 15px;
+        }
+
+        /* --- CAJA DE LETRA --- */
+        .letter-box {
+            position: absolute;
+            top: 0; left: 50%;
+            transform: translateX(-50%);
+            width: 60px; height: 55px;
+            background-color: var(--primary);
+            color: white;
+            text-align: center;
+            border-bottom-left-radius: 8px;
+            border-bottom-right-radius: 8px;
+            z-index: 20;
+        }
+        .letter { font-size: 32px; font-weight: 800; line-height: 38px; }
+        .letter-code {
+            font-size: 10px;
+            background: rgba(0,0,0,0.3);
+            display: block;
+            padding: 2px 0;
+            font-weight: bold;
+        }
+
+        .vertical-line {
+            position: absolute; left: 50%; top: 60px; bottom: 10px;
+            width: 1px; background-color: var(--border);
+        }
+
+        /* --- COLUMNAS --- */
+        .col-header { position: absolute; top: 0; width: 45%; padding: 15px; }
+        .col-left { left: 0; }
+        .col-right { right: 0; text-align: right; }
+
+        .company-logo { max-height: 60px; max-width: 180px; margin-bottom: 5px; }
+        .company-title { font-size: 14pt; color: var(--primary); margin: 0; text-transform: uppercase; }
+
+        .info-row { font-size: 9pt; margin-bottom: 2px; }
+        .info-label { font-weight: bold; color: #555; font-size: 8pt; text-transform: uppercase; }
+
+        .invoice-title {
+            font-size: 18pt; font-weight: bold; color: var(--primary);
+            border-bottom: 2px solid var(--primary);
+            display: inline-block; padding-left: 20px; margin-bottom: 10px;
+        }
+
+        /* --- CLIENTE --- */
+        .client-wrapper {
+            background-color: var(--secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin-bottom: 15px;
+        }
+        table.clean-table { width: 100%; border-collapse: collapse; }
+        table.clean-table td { vertical-align: top; padding: 2px; }
+
+        /* --- ITEMS --- */
+        .items-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+        .items-table th {
+            background-color: var(--primary); color: white;
+            padding: 6px; font-size: 8pt; text-transform: uppercase; text-align: left;
+        }
+        .items-table td {
+            border-bottom: 1px solid #eee; padding: 6px; font-size: 9pt;
+        }
+        .text-right { text-align: right; }
+        .text-center { text-align: center; }
+
+        /* --- TOTALES --- */
+        .totals-wrapper { overflow: hidden; page-break-inside: avoid; }
+        .obs-box {
+            float: left; width: 55%;
+            border: 1px dashed #ccc; border-radius: 4px;
+            padding: 8px; font-size: 9pt; color: #555;
+            min-height: 80px;
+        }
+        .totals-box {
+            float: right; width: 40%;
+            background: var(--secondary); border: 1px solid var(--border);
+            border-radius: 6px; padding: 10px;
+        }
+        .total-row { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 10pt; }
+        .total-big { font-size: 13pt; font-weight: bold; color: var(--primary); border-top: 1px solid #999; margin-top: 5px; padding-top: 5px; }
+
+        /* --- FOOTER FIJO (QR) --- */
+        .footer {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            height: 3cm;
+            border-top: 2px solid var(--primary);
+            padding-top: 10px;
+            background: #fff;
+        }
+        .qr-img { width: 90px; height: 90px; float: left; margin-right: 15px; }
+    </style>
+</head>
+<body>
+
+    <div class="header-wrapper">
+        <div class="letter-box">
+            <div class="letter">{{ comprobante.letra }}</div>
+            <div class="letter-code">COD. {{ comprobante.tipo_comprobante.codigo_afip|default:"00" }}</div>
+        </div>
+        <div class="vertical-line"></div>
+
+        <div class="col-header col-left">
+            {% if logo_url %}
+                <img src="{{ logo_url }}" class="company-logo">
+            {% else %}
+                <h2 class="company-title">{{ empresa.razon_social }}</h2>
+            {% endif %}
+
+            <div class="info-row"><span class="info-label">Razón Social:</span> {{ empresa.razon_social }}</div>
+            <div class="info-row">
+                <span class="info-label">Domicilio:</span>
+                {% with dom=empresa.domicilios.first %}
+                    {{ dom.calle|default:"-" }} {{ dom.numero }}
+                    {% if dom.localidad %}- {{ dom.localidad.nombre }}{% endif %}
+                {% endwith %}
+            </div>
+            <div class="info-row"><span class="info-label">Cond. IVA:</span> {{ empresa.situacion_iva }}</div>
+        </div>
+
+        <div class="col-header col-right">
+            <div class="invoice-title">{{ comprobante.tipo_comprobante.nombre|upper }}</div>
+
+            <div class="info-row">
+                <span class="info-label">Punto Venta:</span> {{ comprobante.punto_venta|stringformat:"05d" }} &nbsp;
+                <span class="info-label">Comp. Nro:</span> {{ comprobante.numero|stringformat:"08d" }}
+            </div>
+
+            <div class="info-row">
+                <span class="info-label">Fecha Emisión:</span> {{ comprobante.fecha|date:"d/m/Y" }}
+            </div>
+
+            <div class="info-row">
+                <span class="info-label">CUIT:</span> {{ empresa.cuit }}
+            </div>
+
+            <div class="info-row">
+                <span class="info-label">Ingresos Brutos:</span> {{ config.ingresos_brutos|default:"-" }}
+            </div>
+
+            <div class="info-row">
+                <span class="info-label">Inicio Act.:</span> {{ config.inicio_actividades|date:"d/m/Y" }}
+            </div>
+        </div>
+    </div>
+
+    <div class="client-wrapper">
+        <table class="clean-table">
+            <tr>
+                <td width="15%"><span class="info-label">Cliente:</span></td>
+                <td width="50%"><strong>{{ comprobante.cliente.entidad.razon_social }}</strong></td>
+                <td width="15%"><span class="info-label">CUIT/DNI:</span></td>
+                <td width="20%">{{ comprobante.cliente.entidad.cuit }}</td>
+            </tr>
+
+            <tr>
+                <td><span class="info-label">Domicilio:</span></td>
+                <td>{{ comprobante.cliente.entidad.domicilios.first.calle|default:"-" }}</td>
+                <td><span class="info-label">Cond. IVA:</span></td>
+                <td>{{ comprobante.cliente.entidad.situacion_iva }}</td>
+            </tr>
+
+            <tr>
+                <td><span class="info-label">Cond. Venta:</span></td>
+                <td colspan="3">
+                    {{ comprobante.get_condicion_venta_display|upper }}
+                </td>
+            </tr>
+        </table>
+    </div>
+
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th width="15%">Código</th>
+                <th width="40%">Descripción</th>
+                <th width="10%" class="text-center">Cant.</th>
+                <th width="10%" class="text-center">Unid.</th>
+                {% if discrimina_iva %}
+                    <th width="12%" class="text-right">Precio Neto</th>
+                    <th width="13%" class="text-right">Subtotal Neto</th>
+                {% else %}
+                    <th width="12%" class="text-right">Precio Unit.</th>
+                    <th width="13%" class="text-right">Subtotal</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in items_impresion %}
+            <tr>
+                <td>{{ item.codigo }}</td>
+                <td>{{ item.descripcion }}</td>
+                <td class="text-center">{{ item.cantidad|floatformat:2 }}</td>
+                <td class="text-center">{{ item.unidad }}</td>
+                <td class="text-right">${{ item.precio_unitario|floatformat:2 }}</td>
+                <td class="text-right">${{ item.subtotal|floatformat:2 }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="totals-wrapper">
+        <div class="obs-box">
+            <strong>Observaciones:</strong><br>
+            {{ comprobante.observaciones|default:"-"|linebreaksbr }}
+        </div>
+
+        <div class="totals-box">
+            <div class="total-row">
+                <span>Subtotal {% if discrimina_iva %}Neto{% endif %}:</span>
+                <span>${{ subtotal_comprobante|floatformat:2 }}</span>
+            </div>
+
+            {% if discrimina_iva %}
+                {% if comprobante.impuestos %}
+                     {% for k, v in comprobante.impuestos.items %}
+                     <div class="total-row" style="color:#666;">
+                        <span>{{ k }}:</span>
+                        <span>${{ v }}</span>
+                     </div>
+                     {% endfor %}
+                {% else %}
+                     <div class="total-row">
+                        <span>IVA:</span>
+                        <span>${{ total_iva_calculado|floatformat:2 }}</span>
+                     </div>
+                {% endif %}
+            {% endif %}
+
+            <div class="total-row total-big">
+                <span>TOTAL:</span>
+                <span>${{ comprobante.total|floatformat:2 }}</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        {% if qr_afip %}
+            <img src="{{ qr_afip }}" class="qr-img">
+        {% endif %}
+
+        <div style="float: left; margin-top: 5px;">
+            <img src="https://www.afip.gob.ar/images/logo_afip.png" style="height: 25px;"><br>
+            <strong>Comprobante Autorizado</strong><br>
+            <span style="font-size: 10px;">
+                CAE: <strong>{{ comprobante.cae }}</strong> &nbsp;&nbsp;
+                Vto. CAE: <strong>{{ comprobante.vto_cae|date:"d/m/Y" }}</strong>
+            </span>
+        </div>
+    </div>
+</body>
+</html>

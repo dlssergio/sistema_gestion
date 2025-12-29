@@ -4,21 +4,65 @@ from django.db import models
 from django.contrib.auth.models import Permission, User
 from django.utils import timezone
 from django.core.exceptions import ValidationError
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
 
 
 # --- MODELOS DE CONFIGURACIÓN GENERAL ---
 
 class TipoComprobante(models.Model):
+    # Definimos las opciones para listas desplegables
+    CLASE_CHOICES = [
+        ('V', 'Ventas (Cliente)'),
+        ('C', 'Compras (Proveedor)'),
+        ('F', 'Fondos / Caja'),
+        ('S', 'Stock Interno'),
+    ]
+
+    SIGNO_STOCK_CHOICES = [
+        (1, 'Suma Stock (+)'),
+        (-1, 'Resta Stock (-)'),
+        (0, 'No Mueve Stock'),
+    ]
+
     nombre = models.CharField(max_length=100, unique=True, verbose_name="Nombre del Comprobante")
     codigo_afip = models.CharField(max_length=3, blank=True, null=True, help_text="Código de AFIP si corresponde")
-    letra = models.CharField(max_length=1)
-    afecta_stock = models.BooleanField(default=False, help_text="Marcar si este comprobante modifica el stock.")
+    letra = models.CharField(max_length=1, blank=True, null=True, help_text="A, B, C, X, R...")
 
-    def __str__(self): return self.nombre
+    # --- NUEVOS CAMPOS DE COMPORTAMIENTO (Reemplazan a 'afecta_stock') ---
+
+    # 1. Clasificación
+    clase = models.CharField(max_length=1, choices=CLASE_CHOICES, default='V', verbose_name="Clase de Comprobante")
+
+    # 2. Comportamiento de Stock
+    mueve_stock = models.BooleanField(default=False, verbose_name="¿Mueve Stock?")
+    signo_stock = models.IntegerField(choices=SIGNO_STOCK_CHOICES, default=0, verbose_name="Sentido del Stock",
+                                      help_text="Ej: Venta resta (-1), Compra suma (+1), Presupuesto (0)")
+
+    # 3. Comportamiento Financiero
+    mueve_cta_cte = models.BooleanField(default=True, verbose_name="¿Afecta Cta. Cte?",
+                                        help_text="Si afecta el saldo del cliente/proveedor (Deuda/Crédito)")
+    mueve_caja = models.BooleanField(default=False, verbose_name="¿Mueve Caja?",
+                                     help_text="Si mueve dinero real inmediatamente (ej: Recibo, Ticket Contado)")
+
+    # 4. Comportamiento Fiscal / Técnico
+    es_fiscal = models.BooleanField(
+        default=True,
+        verbose_name="Es Fiscal / Electrónico",
+        help_text="Si está activo, este comprobante pedirá CAE (Esquema Electrónico)."
+    )
+    numeracion_automatica = models.BooleanField(default=True,
+                                                help_text="Si el sistema asigna el número (False para facturas de proveedores)")
+
+
+
+    def __str__(self):
+        return f"{self.nombre} ({self.letra or 'X'})"
 
     class Meta:
-        verbose_name = "Tipo de Comprobante";
+        verbose_name = "Tipo de Comprobante"
         verbose_name_plural = "Tipos de Comprobante"
+        ordering = ['nombre']
 
 
 class Contador(models.Model):
@@ -103,6 +147,11 @@ class Localidad(models.Model):
 
 class CategoriaImpositiva(models.Model):
     nombre = models.CharField(max_length=100, unique=True)
+    codigo_afip = models.IntegerField(
+        verbose_name="Código AFIP (Receptor)",
+        help_text="1=IVA Resp. Inscripto, 5=Consumidor Final, 6=Monotributo, etc. (Ver Tabla AFIP)",
+        default=5
+    )
     descripcion = models.TextField(blank=True)
 
     def __str__(self): return self.nombre
@@ -210,6 +259,15 @@ class SerieDocumento(models.Model):
     # Auditoría
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 
+    diseno_impresion = models.ForeignKey(
+        'ventas.DisenoImpresion',  # <--- ASÍ: Entre comillas y con el nombre de la app antes.
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name="Diseño de Impresión (Template)",
+        help_text="Si se deja vacío, usa el diseño estándar."
+    )
+
     def __str__(self):
         # Mostramos info útil: Nombre (PV: 0001 - Letra: A)
         return f"{self.nombre} (PV: {self.punto_venta:04d} - {self.tipo_comprobante.letra})"
@@ -250,6 +308,21 @@ class ConfiguracionEmpresa(models.Model):
         related_name='configuracion_principal'
     )
 
+    # --- CONFIGURACIÓN AFIP ---
+    usar_factura_electronica = models.BooleanField(
+        default=True,
+        verbose_name="Habilitar Factura Electrónica",
+        help_text="Si está activo, el sistema intentará conectar con AFIP."
+    )
+
+    modo_facturacion = models.CharField(
+        max_length=10,
+        choices=[('AUTO', 'Automático (Al confirmar venta)'), ('MANUAL', 'Manual (A pedido del usuario)')],
+        default='MANUAL',
+        verbose_name="Modo de Autorización (CAE)",
+        help_text="Automático: Intenta obtener CAE al guardar. Manual: Requiere acción del usuario."
+    )
+
     class Meta:
         verbose_name = "Configuración de Empresa"
         verbose_name_plural = "Configuración de Empresa"
@@ -266,3 +339,131 @@ class ConfiguracionEmpresa(models.Model):
     def save(self, *args, **kwargs):
         self.full_clean()  # Llama al clean() antes de guardar
         super().save(*args, **kwargs)
+
+
+# --- INTEGRACIÓN AFIP ---
+
+class AfipCertificado(models.Model):
+    """
+    Permite al usuario subir y gestionar sus propios certificados digitales.
+    Soporta rotación (historial) y múltiples entornos (Homologación/Producción).
+    """
+    nombre = models.CharField(max_length=100, help_text="Ej: Certificado 2024-2026")
+
+    # Archivos
+    certificado = models.FileField(upload_to='afip/certs/', verbose_name="Certificado (.crt)")
+    clave_privada = models.FileField(upload_to='afip/keys/', verbose_name="Clave Privada (.key)")
+
+    cuit = models.CharField(max_length=11, help_text="CUIT de la empresa emisora (sin guiones)")
+
+    # Automatización Enterprise
+    vencimiento = models.DateField(
+        null=True,
+        blank=True,
+        verbose_name="Fecha de Vencimiento",
+        help_text="Detectado automáticamente desde el archivo .crt"
+    )
+
+    es_produccion = models.BooleanField(
+        default=False,
+        verbose_name="¿Es Producción?",
+        help_text="Si está marcado, emitirá facturas REALES. Si no, usa servidores de prueba."
+    )
+
+    activo = models.BooleanField(default=True, help_text="Desactivar certificados vencidos.")
+    subido_el = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        estado = "ACTIVO" if self.activo else "INACTIVO"
+        env = "PRODUCCIÓN" if self.es_produccion else "TEST"
+        return f"{self.nombre} ({env}) [{estado}]"
+
+    def save(self, *args, **kwargs):
+        """
+        Lógica Enterprise:
+        Al guardar, abrimos el archivo .crt, lo parseamos criptográficamente
+        y extraemos la fecha de vencimiento real para evitar errores humanos.
+        """
+        # Solo procesamos si hay un certificado cargado
+        if self.certificado:
+            try:
+                # 1. Leemos el archivo (funciona tanto para subidas nuevas en memoria como archivos en disco)
+                self.certificado.open('rb')
+                cert_bytes = self.certificado.read()
+
+                # IMPORTANTE: Rebobinar el archivo para que Django pueda guardarlo después en disco/S3
+                self.certificado.seek(0)
+
+                # 2. Usamos la librería 'cryptography' para parsear el X.509
+                cert = x509.load_pem_x509_certificate(cert_bytes, default_backend())
+
+                # 3. Extraemos la fecha 'not_valid_after' y la asignamos
+                # La librería devuelve un datetime, lo convertimos a date
+                self.vencimiento = cert.not_valid_after.date()
+
+                # (Opcional) Podrías extraer también el CUIT del "Subject" del certificado para validarlo
+                # subject = cert.subject.rfc4514_string()
+
+            except Exception as e:
+                # Si el archivo no es un certificado válido o falla la lectura,
+                # no rompemos el guardado, pero dejamos el vencimiento vacío o lo logueamos.
+                print(f"⚠️ Alerta: No se pudo leer el vencimiento del certificado: {e}")
+
+        super().save(*args, **kwargs)
+
+    class Meta:
+        verbose_name = "Certificado Digital AFIP"
+        verbose_name_plural = "Certificados Digitales AFIP"
+
+
+class AfipToken(models.Model):
+    """
+    Tabla técnica interna (invisible al usuario) para cachear el Token de acceso.
+    Evita pedir login a AFIP en cada factura.
+    """
+    certificado = models.ForeignKey(AfipCertificado, on_delete=models.CASCADE)
+    service = models.CharField(max_length=10, help_text="Ej: wsfe")
+    unique_id = models.CharField(max_length=100, help_text="Identificador único del request")
+    token = models.TextField()
+    sign = models.TextField()
+    generado = models.DateTimeField(auto_now_add=True)
+    expira = models.DateTimeField()
+
+    def __str__(self):
+        return f"Token {self.service} (Expira: {self.expira})"
+
+    @property
+    def es_valido(self):
+        # Damos un margen de seguridad de 10 minutos antes de que expire
+        margin = timezone.timedelta(minutes=10)
+        return timezone.now() < (self.expira - margin)
+
+
+class ConfiguracionSMTP(models.Model):
+    PROVEEDORES = [
+        ('smtp.gmail.com', 'Gmail'),
+        ('smtp.office365.com', 'Outlook/Office365'),
+        ('smtp.mail.yahoo.com', 'Yahoo'),
+        ('custom', 'Otro / Personalizado'),
+    ]
+
+    nombre = models.CharField(max_length=50, default="Principal", help_text="Ej: Envío Facturas")
+    host = models.CharField(max_length=100, default='smtp.gmail.com', choices=PROVEEDORES)
+    host_custom = models.CharField(max_length=100, blank=True, null=True, verbose_name="Host Personalizado",
+                                   help_text="Llenar solo si eligió 'Otro'")
+    puerto = models.IntegerField(default=587, help_text="587 para TLS, 465 para SSL")
+    usuario = models.CharField(max_length=100, help_text="Tu correo electrónico")
+    password = models.CharField(max_length=100, verbose_name="Contraseña / App Password")
+    usar_tls = models.BooleanField(default=True, verbose_name="Usar TLS")
+    usar_ssl = models.BooleanField(default=False, verbose_name="Usar SSL")
+    email_from = models.EmailField(verbose_name="Dirección 'Desde'", help_text="Generalmente igual al usuario")
+
+    activo = models.BooleanField(default=True)
+
+    def __str__(self):
+        return f"SMTP: {self.usuario}"
+
+    class Meta:
+        verbose_name = "Configuración de Correo"
+        verbose_name_plural = "Configuraciones de Correo"
+

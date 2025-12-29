@@ -1,3 +1,5 @@
+# entidades/admin.py
+
 from django.contrib import admin
 from django.urls import reverse
 from django.utils.html import format_html
@@ -11,7 +13,8 @@ from ventas.models import Cliente
 
 @admin.register(SituacionIVA)
 class SituacionIVAAdmin(admin.ModelAdmin):
-    list_display = ('codigo', 'nombre')
+    list_display = ('codigo', 'nombre', 'codigo_afip')
+    list_editable = ('codigo_afip',)
     search_fields = ('codigo', 'nombre')
 
 
@@ -19,6 +22,8 @@ class EntidadDomicilioInline(admin.TabularInline):
     model = EntidadDomicilio
     extra = 1
     autocomplete_fields = ['localidad']
+    # Como cambiamos el modelo a calle/numero, TabularInline mostrará todas las columnas.
+    # Si queda muy ancho, puedes cambiarlo a admin.StackedInline
 
 
 class EntidadTelefonoInline(admin.TabularInline):
@@ -28,7 +33,9 @@ class EntidadTelefonoInline(admin.TabularInline):
 
 class EntidadEmailInline(admin.TabularInline):
     model = EntidadEmail
-    extra = 1
+    extra = 0
+    verbose_name = "Email Adicional"
+    verbose_name_plural = "Emails Adicionales (Secundarios)"
 
 
 class ProveedorInline(admin.StackedInline):
@@ -46,19 +53,26 @@ class ClienteInline(admin.StackedInline):
 
 @admin.register(Entidad)
 class EntidadAdmin(admin.ModelAdmin):
-    # <<< CAMBIO CLAVE: Eliminamos la referencia a la plantilla personalizada >>>
     # change_form_template = "admin/entidades/entidad/change_form.html"
 
-    list_display = ('id', 'razon_social', 'cuit', 'situacion_iva')
-    search_fields = ('razon_social', 'cuit', 'dni')
+    # 1. VISUALIZACIÓN EN LISTA
+    list_display = ('id', 'razon_social', 'cuit', 'situacion_iva', 'email')
+    search_fields = ('razon_social', 'cuit', 'dni', 'email')
     autocomplete_fields = ['situacion_iva']
+
+    # 2. FORMULARIO DE EDICIÓN (Aquí estaba el faltante)
     fieldsets = (
-        (None, {'fields': ('razon_social', 'sexo', 'dni', 'cuit', 'situacion_iva')}),
+        ('Datos Principales', {
+            'fields': ('razon_social', 'cuit', 'situacion_iva', 'email')  # <--- ¡AGREGADO AQUÍ!
+        }),
+        ('Datos Persona Física (Opcional)', {
+            'fields': ('sexo', 'dni'),
+            'classes': ('collapse',),  # Esto permite ocultar la sección si no se usa
+        }),
     )
 
     base_inlines = [EntidadDomicilioInline, EntidadTelefonoInline, EntidadEmailInline]
 
-    # <<< CAMBIO CLAVE: Modificamos la clase Media para cargar SOLO el script del CUIL >>>
     class Media:
         js = ('admin/js/entidad_form.js',)
 
@@ -84,7 +98,6 @@ class EntidadAdmin(admin.ModelAdmin):
         self.inlines = self.get_inlines(request, obj)
         return super().change_view(request, object_id, form_url, extra_context=extra_context)
 
-    # <<< CORRECCIÓN DE LÓGICA: El método 'save_model' se asegura de crear el rol >>>
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
         if not change:

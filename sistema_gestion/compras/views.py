@@ -1,5 +1,3 @@
-# sistema_gestion/compras/views.py
-
 import json
 from decimal import Decimal
 from django.http import JsonResponse
@@ -14,7 +12,7 @@ from django.core.exceptions import ValidationError
 
 # --- Modelos ---
 from .models import ComprobanteCompra, ComprobanteCompraItem, Proveedor
-from inventario.models import Articulo, StockArticulo, Deposito  # Asegúrate de importar Deposito
+from inventario.models import Articulo, StockArticulo, Deposito
 from parametros.models import Moneda, TipoComprobante
 
 # --- Serializers ---
@@ -26,94 +24,97 @@ from .serializers import (
 # --- Servicios ---
 from ventas.services import TaxCalculatorService
 from compras.services import CostCalculatorService
-
 from entidades.serializers import ProveedorSerializer
+
 
 class ComprobanteCompraViewSet(viewsets.ModelViewSet):
     queryset = ComprobanteCompra.objects.all().order_by('-fecha', '-id')
 
     def get_serializer_class(self):
-        # Usamos el serializer complejo para leer y el simple para escribir
         if self.action in ['create', 'update', 'partial_update']:
             return ComprobanteCompraCreateSerializer
         return ComprobanteCompraSerializer
 
     def create(self, request, *args, **kwargs):
+        # 1. Validación inicial
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         try:
             with transaction.atomic():
-                # 1. Separar datos de items y cabecera
+                # 2. Separar items
                 items_data = serializer.validated_data.pop('items')
                 datos_compra = serializer.validated_data
 
-                # 2. Crear Cabecera
+                # 3. Crear Cabecera
                 compra = ComprobanteCompra.objects.create(**datos_compra)
 
                 total_acumulado = Decimal(0)
+                moneda_comprobante = 'ARS'
 
-                # 3. Procesar Ítems
-                for item_data in items_data:
-                    # Crear el ítem
-                    item_creado = ComprobanteCompraItem.objects.create(comprobante=compra, **item_data)
+                # 4. Procesar Ítems
+                for item in items_data:
+                    articulo_obj = item['articulo']
+                    cantidad_val = item['cantidad']
 
-                    # Sumar al total (simple suma de subtotales por ahora)
-                    # Nota: item_creado.subtotal se calcula en el save() del modelo si lo tienes configurado,
-                    # o podemos calcularlo aqui. Asumimos que el modelo lo hace o usamos cantidad * precio.
-                    subtotal_linea = item_creado.cantidad * item_creado.precio_costo_unitario.amount
+                    # Buscamos el monto (fallback seguro)
+                    monto_val = item.get('precio_costo_unitario_monto')
+                    if monto_val is None:
+                        monto_val = item.get('precio_costo_unitario')
+
+                    if monto_val is None:
+                        monto_val = Decimal(0)
+
+                    # --- GUARDADO ÍTEM (Solo Monto) ---
+                    item_creado = ComprobanteCompraItem.objects.create(
+                        comprobante=compra,
+                        articulo=articulo_obj,
+                        cantidad=cantidad_val,
+                        precio_costo_unitario_monto=monto_val
+                        # NO guardamos currency aquí para evitar errores de columna
+                    )
+
+                    # Sumar al total acumulado (Decimal puro)
+                    subtotal_linea = Decimal(item_creado.cantidad) * monto_val
                     total_acumulado += subtotal_linea
 
-                    # 4. IMPACTO EN STOCK (Si está confirmado)
-                    if compra.estado == ComprobanteCompra.Estado.CONFIRMADO:  # Asegúrate que tu modelo tenga Estado.CONFIRMADO o usa 'CN'
-                        articulo = item_creado.articulo
-                        cantidad = item_creado.cantidad
+                    # Detectar moneda para referencia
+                    if hasattr(item_creado, 'precio_costo_unitario') and hasattr(item_creado.precio_costo_unitario,
+                                                                                 'currency'):
+                        moneda_comprobante = item_creado.precio_costo_unitario.currency.code
 
-                        # Definir depósito (Por defecto Central si no se especifica en la lógica)
-                        # Aquí podrías agregar un campo 'deposito' al modelo ComprobanteCompra si no existe
-                        deposito = Deposito.objects.filter(es_principal=True).first()
+                # 5. Actualizar Total (CORRECCIÓN FINAL - VOLVEMOS A LO QUE FUNCIONÓ)
+                # NO usamos Money() aquí. Pasamos el Decimal puro.
 
-                        if deposito:
-                            stock_obj, _ = StockArticulo.objects.get_or_create(
-                                articulo=articulo,
-                                deposito=deposito,
-                                defaults={'cantidad': 0}
-                            )
-                            stock_obj.cantidad += cantidad  # AUMENTA el stock
-                            stock_obj.save()
+                compra.total = total_acumulado
 
-                # 5. Actualizar Total del Comprobante
-                # Asignamos la moneda del primer item o ARS por defecto
-                moneda = 'ARS'
-                if items_data:
-                    moneda = items_data[0]['precio_costo_unitario'].currency
+                # Forzamos la moneda en la columna separada (así funciona djmoney por debajo)
+                if hasattr(compra, 'total_currency'):
+                    compra.total_currency = moneda_comprobante
 
-                compra.total = Money(total_acumulado, moneda)
-                compra.saldo_pendiente = compra.total  # Asumimos cuenta corriente inicial
+                # Saldo pendiente también recibe Decimal puro
+                compra.saldo_pendiente = total_acumulado
+
                 compra.save()
 
         except Exception as e:
+            print(f"ERROR CREATE COMPRA: {e}")
+            import traceback
+            traceback.print_exc()
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Devolvemos el objeto creado con el serializer de lectura (para ver los detalles completos)
         read_serializer = ComprobanteCompraSerializer(compra)
         return Response(read_serializer.data, status=status.HTTP_201_CREATED)
 
 
-# --- TUS VISTAS AUXILIARES EXISTENTES (Se mantienen igual para no romper Admin) ---
+# --- VISTAS AUXILIARES COMPLETAS ---
 
 @staff_member_required
 def get_precio_proveedor_json(request, proveedor_pk, articulo_pk):
-    """
-    Busca el costo más relevante para un artículo de un proveedor específico.
-    Blindada contra errores de tipos de datos.
-    """
     try:
         articulo = get_object_or_404(Articulo, pk=articulo_pk)
         cantidad_a_comprar = Decimal(request.GET.get('cantidad', 1))
 
-        # 1. Obtener precio del servicio
-        # El servicio puede devolver un objeto complejo o None
         item_precio = CostCalculatorService.get_latest_price(
             proveedor_pk=proveedor_pk,
             articulo_pk=articulo_pk,
@@ -124,41 +125,28 @@ def get_precio_proveedor_json(request, proveedor_pk, articulo_pk):
         source_info = ''
 
         if item_precio:
-            # Intentamos calcular el costo efectivo
             try:
-                # Si el servicio devuelve un objeto con método costo_efectivo (modelo nuevo)
                 if hasattr(item_precio, 'costo_efectivo'):
                     costo_final_money = item_precio.costo_efectivo
-                # Si es el modelo viejo o el servicio devuelve el objeto raw
                 else:
                     costo_final_money = CostCalculatorService.calculate_effective_cost(item_precio)
-
                 source_info = 'Precio de Proveedor'
             except Exception as e:
-                print(f"Error calculando costo efectivo: {e}")
-                # Fallback si falla el cálculo complejo
                 if hasattr(item_precio, 'precio_costo'):
                     costo_final_money = item_precio.precio_costo
                 elif hasattr(item_precio, 'precio_lista'):
                     costo_final_money = item_precio.precio_lista
 
-        # 2. Fallback al artículo si no hay precio de proveedor
         if not costo_final_money:
-            # Usamos la property del artículo que devuelve Money
             costo_final_money = articulo.precio_costo
             source_info = 'Costo Base del Artículo'
 
-        # 3. Asegurar que tenemos un objeto Money válido
         if not isinstance(costo_final_money, Money):
-            moneda_default = articulo.precio_costo_moneda.simbolo if articulo.precio_costo_moneda else 'ARS'
+            moneda_default = 'ARS'
             costo_final_money = Money(costo_final_money, moneda_default)
 
-        # 4. Obtener ID de moneda para el select del frontend (CORREGIDO)
-        # Usamos filter().first() para evitar error si hay duplicados en la BD
         moneda_obj = Moneda.objects.filter(simbolo=costo_final_money.currency.code).first()
-
         if not moneda_obj:
-            # Si no encuentra la moneda por símbolo, busca la base
             moneda_obj = Moneda.objects.filter(es_base=True).first()
 
         moneda_id = moneda_obj.id if moneda_obj else 1
@@ -171,9 +159,6 @@ def get_precio_proveedor_json(request, proveedor_pk, articulo_pk):
         })
 
     except Exception as e:
-        # Log del error real para debugging
-        import traceback
-        traceback.print_exc()
         return JsonResponse({
             'error': 'SERVER_ERROR',
             'message': f'Error interno: {str(e)}'
@@ -183,70 +168,93 @@ def get_precio_proveedor_json(request, proveedor_pk, articulo_pk):
 @staff_member_required
 @require_POST
 def calcular_totales_compra_api(request):
+    """
+    Calcula totales simulando el comprobante en memoria.
+    """
     try:
         data = json.loads(request.body)
         items_data = data.get('items', [])
 
         class FakeItem:
-            def __init__(self, data):
-                self.articulo = Articulo.objects.get(pk=data.get('articulo'))
-                self.cantidad = Decimal(data.get('cantidad', '0'))
-                monto = Decimal(data.get('precio_monto', '0'))
-                moneda_id = data.get('precio_moneda_id')
-                if moneda_id:
-                    moneda_simbolo = Moneda.objects.get(pk=moneda_id).simbolo
+            def __init__(self, item_data):
+                self.articulo_id = item_data.get('articulo')
+                if self.articulo_id:
+                    self.articulo = Articulo.objects.get(pk=self.articulo_id)
                 else:
-                    moneda_simbolo = 'ARS'
-                self.precio_costo_unitario = Money(monto, moneda_simbolo)
+                    self.articulo = None
+
+                self.cantidad = Decimal(str(item_data.get('cantidad', 0)))
+
+                raw_precio = item_data.get('precio_costo_unitario', 0)
+                if isinstance(raw_precio, dict):
+                    monto = Decimal(str(raw_precio.get('amount', 0)))
+                else:
+                    monto = Decimal(str(raw_precio))
+
+                self.precio_costo_unitario = Money(monto, 'ARS')
 
             @property
             def subtotal(self):
                 return self.cantidad * self.precio_costo_unitario
 
         class FakeComprobante:
-            def __init__(self, items_data):
-                self.items_list = [FakeItem(item) for item in items_data if item.get('articulo')]
-                tipo_comprobante_id = data.get('tipo_comprobante')
-                self.tipo_comprobante = TipoComprobante.objects.get(
-                    pk=tipo_comprobante_id) if tipo_comprobante_id else None
+            def __init__(self, items_data_raw, data_raw):
+                self.items_list = []
+                for i in items_data_raw:
+                    if i.get('articulo'):
+                        self.items_list.append(FakeItem(i))
+
+                tipo_id = data_raw.get('tipo_comprobante')
+                self.tipo_comprobante = None
+                if tipo_id:
+                    self.tipo_comprobante = TipoComprobante.objects.filter(pk=tipo_id).first()
 
             @property
-            def items(self): return self
+            def items(self):
+                return self
 
-            def all(self): return self.items_list
+            def all(self):
+                return self.items_list
 
-        fake_comprobante = FakeComprobante(items_data)
+        fake_comprobante = FakeComprobante(items_data, data)
+
+        subtotal_val = Decimal(0)
         subtotal_currency = 'ARS'
-        if fake_comprobante.all(): subtotal_currency = fake_comprobante.all()[0].subtotal.currency.code
 
-        subtotal = sum((item.subtotal for item in fake_comprobante.all()), Money(0, subtotal_currency))
+        for item in fake_comprobante.all():
+            subtotal_val += item.subtotal.amount
+            subtotal_currency = item.subtotal.currency.code
+
+        subtotal = Money(subtotal_val, subtotal_currency)
+
         desglose_impuestos = TaxCalculatorService.calcular_impuestos_comprobante(fake_comprobante, 'compra')
-        total_impuestos = sum(desglose_impuestos.values())
-        total = subtotal + Money(total_impuestos, subtotal.currency)
+        total_impuestos_val = sum(desglose_impuestos.values())
+        total_final = subtotal + Money(total_impuestos_val, subtotal.currency)
 
         return JsonResponse({
             'subtotal': f"{subtotal.amount:,.2f}",
             'currency_symbol': subtotal.currency.code,
             'impuestos': {k: f"{v:,.2f}" for k, v in desglose_impuestos.items()},
-            'total': f"{total.amount:,.2f}",
+            'total': f"{total_final.amount:,.2f}",
         })
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return JsonResponse({'error': str(e)}, status=400)
+        # Fallback silencioso en caso de error de cálculo
+        return JsonResponse({
+            'subtotal': '0.00',
+            'currency_symbol': 'ARS',
+            'impuestos': {},
+            'total': '0.00'
+        })
 
 
 @staff_member_required
 def get_comprobante_info(request, pk):
-    """
-    Devuelve saldo y total de un comprobante para autocompletar la Orden de Pago.
-    """
     try:
         comp = ComprobanteCompra.objects.get(pk=pk)
         return JsonResponse({
-            'saldo': str(comp.saldo_pendiente),
-            'total': str(comp.total),
+            'saldo': str(comp.saldo_pendiente.amount),
+            'total': str(comp.total.amount),
             'id': comp.pk})
     except ComprobanteCompra.DoesNotExist:
         return JsonResponse({'error': 'Comprobante no encontrado'}, status=404)

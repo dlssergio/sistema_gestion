@@ -51,6 +51,7 @@ class ArticuloSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'cod_articulo', 'descripcion', 'ean', 'marca', 'rubro',
+            'foto',
             'stock_total', 'precio_costo', 'precio_venta', 'utilidad',
             'precio_final_calculado', 'administra_stock', 'esta_activo'
         ]

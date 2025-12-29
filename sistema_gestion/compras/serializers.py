@@ -17,6 +17,7 @@ from parametros.serializers import TipoComprobanteSerializer
 class ComprobanteCompraItemCreateSerializer(serializers.ModelSerializer):
     articulo = serializers.PrimaryKeyRelatedField(queryset=Articulo.objects.all())
 
+    # Mantenemos tu corrección de precio, que está perfecta
     precio_costo_unitario = serializers.DecimalField(
         source='precio_costo_unitario_monto',
         max_digits=14,
@@ -57,14 +58,18 @@ class ComprobanteCompraItemSerializer(serializers.ModelSerializer):
         model = ComprobanteCompraItem
         fields = ['articulo', 'cantidad', 'precio_costo_unitario', 'subtotal']
 
-
 class ComprobanteCompraSerializer(serializers.ModelSerializer):
     proveedor = ProveedorSerializer(read_only=True)
     tipo_comprobante = TipoComprobanteSerializer(read_only=True)
     items = ComprobanteCompraItemSerializer(many=True, read_only=True)
     total = MoneyField(max_digits=12, decimal_places=2, read_only=True)
+    numero_completo = serializers.SerializerMethodField()
 
     class Meta:
         model = ComprobanteCompra
         fields = ['id', 'numero_completo', 'proveedor', 'fecha', 'estado', 'total', 'tipo_comprobante', 'items']
 
+    def get_numero_completo(self, obj):
+        if obj.punto_venta and obj.numero:
+            return f"{obj.punto_venta:04d}-{obj.numero:08d}"
+        return f"{obj.punto_venta}-{obj.numero}"

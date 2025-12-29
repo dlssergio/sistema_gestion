@@ -241,7 +241,8 @@ AWS_S3_ENDPOINT_URL = 'http://localhost:9000'
 
 # --- CORRECCIÓN CRÍTICA ---
 AWS_S3_URL_PROTOCOL = 'http:'  # 1. Forzamos HTTP aquí
-AWS_S3_CUSTOM_DOMAIN = 'localhost:9000/erp-media-local' # 2. Quitamos el protocolo de aquí (dominio limpio)
+#AWS_S3_CUSTOM_DOMAIN = 'localhost:9000/erp-media-local' # 2. Quitamos el protocolo de aquí (dominio limpio)
+AWS_S3_CUSTOM_DOMAIN = f'localhost:9000/{AWS_STORAGE_BUCKET_NAME}'
 AWS_S3_USE_SSL = False # 3. Le decimos a boto3 que no intente usar SSL
 
 AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
@@ -263,3 +264,21 @@ if USE_S3:
             "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
         },
     }
+
+# URL base para acceder a los archivos desde el navegador
+MEDIA_URL = '/media/'
+
+# Ruta física en tu disco duro donde se guardarán los archivos
+# BASE_DIR es la carpeta raíz de tu proyecto
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+
+
+# --- CONFIGURACIÓN DE EMAIL (SMTP) ---
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com' # O tu servidor (Outlook: smtp.office365.com)
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'dls.sergio@gmail.com' # <--- PON AQUÍ TU CORREO
+EMAIL_HOST_PASSWORD = 'gxtw kbdk uzae tiak' # <--- PON AQUÍ TU CLAVE
+DEFAULT_FROM_EMAIL = 'dlS Soluciones <dls.sergio@gmail.com>'
