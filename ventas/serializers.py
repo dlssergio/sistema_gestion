@@ -18,8 +18,11 @@ from .models import ComprobanteVenta, ComprobanteVentaItem, Cliente
 # --- SERIALIZERS DE ESCRITURA (CREATE) ---
 
 class ComprobanteVentaItemCreateSerializer(serializers.ModelSerializer):
-    # Ahora 'Articulo' ya está definido y esta línea funcionará
-    articulo = serializers.PrimaryKeyRelatedField(queryset=Articulo.objects.all())
+    #articulo = serializers.PrimaryKeyRelatedField(queryset=Articulo.objects.all())
+    articulo = serializers.SlugRelatedField(
+        queryset=Articulo.objects.all(),
+        slug_field='cod_articulo'
+    )
 
     class Meta:
         model = ComprobanteVentaItem
@@ -42,7 +45,8 @@ class ComprobanteVentaCreateSerializer(serializers.ModelSerializer):
             'estado',
             'punto_venta',
             'numero',
-            'items'
+            'items',
+            'observaciones'
         ]
 
 # --- SERIALIZERS DE LECTURA (READ) ---
@@ -60,4 +64,4 @@ class ComprobanteVentaSerializer(serializers.ModelSerializer):
     items = ComprobanteVentaItemSerializer(many=True, read_only=True)
     class Meta:
         model = ComprobanteVenta
-        fields = ['id', 'numero_completo', 'cliente', 'fecha', 'estado', 'total', 'tipo_comprobante', 'items']
+        fields = ['id', 'numero_completo', 'cliente', 'fecha', 'estado', 'total', 'tipo_comprobante', 'items', 'observaciones']

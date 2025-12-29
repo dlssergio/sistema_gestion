@@ -1,13 +1,20 @@
-# en entidades/models.py (Versión Corregida Final)
+# entidades/models.py (VERSIÓN DEFINITIVA COMPATIBLE CON PDF Y EMAIL)
 
 from django.db import models
 from django.core.exceptions import ValidationError
-from parametros.models import Localidad # <-- CORRECTO: Solo importamos Localidad desde parametros
+from parametros.models import Localidad
 
-# 'SituacionIVA' se define en este mismo archivo, por eso no se importa.
+
+# --- SITUACIÓN IVA ---
 class SituacionIVA(models.Model):
     codigo = models.CharField(max_length=3, unique=True, verbose_name="Código")
     nombre = models.CharField(max_length=100, unique=True)
+
+    codigo_afip = models.IntegerField(
+        verbose_name="Código AFIP (Receptor)",
+        help_text="1=IVA Resp. Inscripto, 5=Consumidor Final, 6=Monotributo (Ver Tabla AFIP)",
+        default=5
+    )
 
     def __str__(self):
         return f"({self.codigo}) {self.nombre}"
@@ -17,6 +24,7 @@ class SituacionIVA(models.Model):
         verbose_name_plural = "Situaciones frente al IVA"
 
 
+# --- ENTIDAD PRINCIPAL ---
 class Entidad(models.Model):
     class Sexo(models.TextChoices):
         MASCULINO = 'M', 'Masculino'
@@ -29,6 +37,10 @@ class Entidad(models.Model):
     cuit = models.CharField(max_length=13, unique=True, blank=True, null=True, verbose_name="CUIT/CUIL")
     situacion_iva = models.ForeignKey(SituacionIVA, on_delete=models.PROTECT, verbose_name="Situación IVA")
 
+    # --- CAMPO AGREGADO PARA SOLUCIONAR EL ERROR DE EMAIL ---
+    email = models.EmailField(max_length=254, blank=True, null=True, verbose_name="Email Facturación")
+
+    # Validadores internos
     def _cuit_es_valido(self, cuit):
         if not isinstance(cuit, str) or len(cuit) != 11 or not cuit.isdigit():
             return False
@@ -50,6 +62,7 @@ class Entidad(models.Model):
             prefijo = "27"
         else:
             return None
+
         base = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
         numero_sin_verificador = prefijo + dni
         suma = sum(int(numero_sin_verificador[i]) * base[i] for i in range(10))
@@ -85,20 +98,28 @@ class Entidad(models.Model):
         verbose_name_plural = "Entidades"
 
 
+# --- DOMICILIO (ACTUALIZADO PARA PDF) ---
 class EntidadDomicilio(models.Model):
     entidad = models.ForeignKey(Entidad, related_name='domicilios', on_delete=models.CASCADE)
-    domicilio = models.CharField(max_length=255)
+
+    # Hemos dividido 'domicilio' en campos detallados para que el PDF salga perfecto
+    calle = models.CharField(max_length=200, verbose_name="Calle")
+    numero = models.CharField(max_length=20, blank=True, null=True, verbose_name="Número")
+    piso = models.CharField(max_length=10, blank=True, null=True)
+    dpto = models.CharField(max_length=10, blank=True, null=True, verbose_name="Depto")
+
     localidad = models.ForeignKey(Localidad, on_delete=models.PROTECT)
     latitud = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     longitud = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
 
     def __str__(self):
-        return f"{self.domicilio}, {self.localidad}"
+        return f"{self.calle} {self.numero or ''}, {self.localidad}"
 
     class Meta:
         verbose_name = "Domicilio"
 
 
+# --- TELÉFONOS ---
 class EntidadTelefono(models.Model):
     TIPO_CHOICES = [('FIJO', 'Fijo'), ('CEL', 'Celular'), ('FAX', 'Fax'), ('COM', 'Comercial')]
     entidad = models.ForeignKey(Entidad, related_name='telefonos', on_delete=models.CASCADE)
@@ -112,12 +133,17 @@ class EntidadTelefono(models.Model):
         verbose_name = "Teléfono"
 
 
+# --- EMAILS ADICIONALES (OPCIONAL) ---
+# Mantenemos esta tabla por si quieres guardar emails secundarios (ej: compras, pagos),
+# pero el email PRINCIPAL de facturación ahora está en el modelo Entidad.
 class EntidadEmail(models.Model):
-    entidad = models.ForeignKey(Entidad, related_name='emails', on_delete=models.CASCADE)
+    entidad = models.ForeignKey(Entidad, related_name='emails_secundarios', on_delete=models.CASCADE)
     email = models.EmailField()
+    tipo = models.CharField(max_length=50, default="Secundario", help_text="Ej: Administración, Compras")
 
     def __str__(self):
         return self.email
 
     class Meta:
-        verbose_name = "Email"
+        verbose_name = "Email Adicional"
+        verbose_name_plural = "Emails Adicionales"

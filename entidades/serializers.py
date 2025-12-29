@@ -25,6 +25,7 @@ class EntidadSerializer(serializers.ModelSerializer):
 
 class ClienteSerializer(serializers.ModelSerializer):
     entidad = EntidadSerializer(read_only=True)
+    id = serializers.ReadOnlyField(source='pk')
 
     class Meta:
         model = Cliente
