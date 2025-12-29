@@ -21,6 +21,7 @@ import dayjs from 'dayjs'
 import { message, theme, Modal } from 'ant-design-vue'
 import axios from 'axios'
 import { useConfigStore } from '@/stores/config'
+import { watch } from 'vue'
 
 const configStore = useConfigStore()
 const router = useRouter()
@@ -60,9 +61,9 @@ const tiposComprobante = ref([
 
 const formState = reactive({
   clienteId: null,
-  tipoComprobanteId: 1,
+  tipoComprobanteId: 2,
   fecha: dayjs(),
-  puntoVenta: 1,
+  puntoVenta: configStore.puntoVentaDefault || 1,
 })
 
 const items = ref([])
@@ -346,10 +347,35 @@ onMounted(() => {
 })
 onUnmounted(() => window.removeEventListener('keydown', handleKeyboard))
 
+const getImageUrl = (path) => {
+  if (!path) return 'https://via.placeholder.com/150?text=Sin+Imagen'
+
+  // Si la URL ya empieza con http (viene de MinIO), la usamos tal cual
+  if (path.startsWith('http')) return path
+
+  // Solo si viene relativa (caso raro), le pegamos el dominio local
+  return `http://tenant1.localhost:8000${path}`
+}
 // --- COMPUTADAS AUX ---
 const clienteInfo = computed(() => {
   if (!formState.clienteId) return null
   return clientes.value.find((c) => c.value === formState.clienteId) || null
+})
+// --- AUTOMATIZACIÓN FISCAL AFIP ---
+watch(clienteInfo, (nuevoCliente) => {
+  if (nuevoCliente) {
+    // Lógica de negocio: Determinación automática del comprobante
+    const condicion = nuevoCliente.condicion.toLowerCase()
+
+    // Si es Responsable Inscripto -> Factura A (ID 1)
+    // Si es Consumidor Final / Monotributo / Exento -> Factura B (ID 2)
+    // NOTA: Ajusta los IDs (1 y 2) según como los tengas en tu base de datos
+    if (condicion.includes('inscripto')) {
+      formState.tipoComprobanteId = 1
+    } else {
+      formState.tipoComprobanteId = 2
+    }
+  }
 })
 const itemInfo = computed(() => {
   if (!selectedRowKey.value) return null
@@ -571,8 +597,9 @@ const goHome = () => router.push('/')
                 <div class="card-header"><InfoCircleOutlined /> Detalle Artículo</div>
                 <div class="product-visual">
                   <img
-                    :src="itemInfo.foto || 'https://via.placeholder.com/150?text=Sin+Imagen'"
+                    :src="getImageUrl(itemInfo.foto)"
                     class="product-img"
+                    alt="Foto del producto"
                   />
                   <div class="stock-badge">{{ itemInfo.stock }} UN</div>
                 </div>

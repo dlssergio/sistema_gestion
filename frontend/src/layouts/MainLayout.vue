@@ -9,7 +9,6 @@ import {
   UserOutlined,
   LogoutOutlined,
   ShopOutlined,
-  ShoppingOutlined,
   TagsOutlined,
   SettingOutlined,
   MenuUnfoldOutlined,
@@ -19,13 +18,23 @@ import {
 } from '@ant-design/icons-vue'
 
 const router = useRouter()
-const route = useRoute()
+const route = useRoute() // <--- NECESARIO PARA LA KEY
 const configStore = useConfigStore()
 const authStore = useAuthStore()
 
 const collapsed = ref(false)
-const selectedKeys = computed(() => [route.name])
+// Usamos ref en lugar de computed para permitir la escritura del menú
+const selectedKeys = ref([route.name])
 const openKeys = ref([])
+
+// Observamos la ruta para actualizar el menú si cambias de página manualmente
+import { watch } from 'vue' // Asegúrate de importar watch arriba si no está
+watch(
+  () => route.name,
+  (newVal) => {
+    selectedKeys.value = [newVal]
+  },
+)
 
 // Configuración dinámica para componentes Ant Design
 const themeConfig = computed(() => {
@@ -89,9 +98,25 @@ const toggleTheme = () => {
               <template #title
                 ><span><ShopOutlined /><span>Ventas</span></span></template
               >
+
               <a-menu-item key="venta-pos" @click="router.push({ name: 'venta-pos' })"
                 >Punto de Venta</a-menu-item
               >
+
+              <a-menu-item key="venta-presupuesto">
+                <router-link :to="{ name: 'venta-presupuesto-nuevo' }">Presupuesto</router-link>
+              </a-menu-item>
+
+              <a-menu-item key="venta-factura-admin">
+                <router-link :to="{ name: 'venta-factura-admin-nueva' }"
+                  >Factura Admin.</router-link
+                >
+              </a-menu-item>
+
+              <a-menu-item key="venta-remito">
+                <router-link :to="{ name: 'venta-remito-nuevo' }">Remito Salida</router-link>
+              </a-menu-item>
+
               <a-menu-item key="venta-lista">Historial</a-menu-item>
               <a-menu-item key="clientes-lista">Clientes</a-menu-item>
             </a-sub-menu>
@@ -111,29 +136,45 @@ const toggleTheme = () => {
 
             <a-sub-menu key="sub-compras">
               <template #title>
-                <span><ShoppingOutlined /><span>Compras</span></span>
+                <span><ShopOutlined /><span>Compras</span></span>
               </template>
-              <a-menu-item key="compra-nueva" @click="router.push({ name: 'compra-nueva' })">
-                Nueva Compra
-              </a-menu-item>
-              <a-menu-item
-                key="proveedores-lista"
-                @click="router.push({ name: 'proveedores-lista' })"
-              >
-                Proveedores
-              </a-menu-item>
+
+              <a-sub-menu key="sub-compras-prov">
+                <template #title>Admin. Proveedores</template>
+                <a-menu-item key="proveedores-lista">
+                  <router-link :to="{ name: 'proveedores-lista' }">Proveedores</router-link>
+                </a-menu-item>
+              </a-sub-menu>
+
+              <a-sub-menu key="sub-compras-docs">
+                <template #title>Comprobantes</template>
+
+                <a-menu-item key="compra-orden">
+                  <router-link :to="{ name: 'compra-orden-nueva' }">Orden de Compra</router-link>
+                </a-menu-item>
+
+                <a-menu-item key="compra-factura">
+                  <router-link :to="{ name: 'compra-factura-nueva' }"
+                    >Factura Proveedor</router-link
+                  >
+                </a-menu-item>
+
+                <a-menu-item key="compra-remito">
+                  <router-link :to="{ name: 'compra-remito-nuevo' }">Remito Ingreso</router-link>
+                </a-menu-item>
+              </a-sub-menu>
             </a-sub-menu>
 
             <a-sub-menu key="sub-finanzas">
-              <template #title>
-                <span><BankOutlined /><span>Finanzas</span></span>
-              </template>
-              <a-menu-item key="caja-lista" @click="router.push({ name: 'caja-lista' })">
-                Caja y Bancos
-              </a-menu-item>
-              <a-menu-item key="cheques-lista" @click="router.push({ name: 'cheques-lista' })">
-                Cheques
-              </a-menu-item>
+              <template #title
+                ><span><BankOutlined /><span>Finanzas</span></span></template
+              >
+              <a-menu-item key="caja-lista" @click="router.push({ name: 'caja-lista' })"
+                >Caja y Bancos</a-menu-item
+              >
+              <a-menu-item key="cheques-lista" @click="router.push({ name: 'cheques-lista' })"
+                >Cheques</a-menu-item
+              >
             </a-sub-menu>
 
             <div class="menu-divider"></div>
@@ -168,11 +209,7 @@ const toggleTheme = () => {
           </a-layout-header>
 
           <a-layout-content class="content-wrapper">
-            <router-view v-slot="{ Component }">
-              <transition name="fade" mode="out-in">
-                <component :is="Component" />
-              </transition>
-            </router-view>
+            <router-view :key="$route.fullPath" />
           </a-layout-content>
 
           <a-layout-footer class="main-footer">
@@ -193,51 +230,38 @@ const toggleTheme = () => {
   background-color: var(--content-bg);
 }
 
-/* TEMA LIGHT (Forzado explícitamente para garantizar Azul)
-   -------------------------------------------------------
-*/
+/* TEMA LIGHT (Forzado explícitamente para garantizar Azul) */
 .theme-light {
-  --sider-bg: linear-gradient(180deg, #1e3a8a 0%, #0f172a 100%); /* Azul Marino Profundo */
-  --header-bg: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%); /* Azul Real Vibrante */
+  --sider-bg: linear-gradient(180deg, #1e3a8a 0%, #0f172a 100%);
+  --header-bg: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
   --content-bg: #f1f5f9;
-  --text-header: #ffffff; /* Texto Blanco */
+  --text-header: #ffffff;
   --footer-text: #94a3b8;
   --menu-active-bg: #3b82f6;
-
-  /* Variables para tarjetas del dashboard */
   --bg-card: #ffffff;
   --text-primary: #1e293b;
   --text-secondary: #64748b;
 }
 
-/* Reglas específicas para Light Mode (Override de AntD) */
 .theme-light .main-header {
   background: var(--header-bg) !important;
   color: #ffffff !important;
   box-shadow: 0 4px 10px rgba(37, 99, 235, 0.2);
 }
-.theme-light .page-title {
-  color: #ffffff !important;
-}
-.theme-light .icon-btn {
-  color: #ffffff !important;
-}
+.theme-light .page-title,
+.theme-light .icon-btn,
 .theme-light .trigger {
   color: #ffffff !important;
 }
 
-/* TEMA DARK
-   ---------
-*/
+/* TEMA DARK */
 .theme-dark {
   --sider-bg: linear-gradient(180deg, #000000 0%, #1e293b 100%);
-  --header-bg: #0f172a; /* Slate 900 */
-  --content-bg: #020617; /* Slate 950 */
+  --header-bg: #0f172a;
+  --content-bg: #020617;
   --text-header: #e2e8f0;
   --footer-text: #475569;
   --menu-active-bg: #facc15;
-
-  /* Variables para tarjetas */
   --bg-card: #1e293b;
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
@@ -252,14 +276,10 @@ const toggleTheme = () => {
 /* =========================================================
    COMPONENTES
    ========================================================= */
-
-/* Sidebar */
 .custom-sider {
   background: var(--sider-bg) !important;
   box-shadow: 4px 0 10px rgba(0, 0, 0, 0.1);
 }
-
-/* Menú Transparente */
 :deep(.ant-menu.ant-menu-dark) {
   background: transparent;
 }
@@ -294,7 +314,6 @@ const toggleTheme = () => {
   margin: 15px 20px;
 }
 
-/* Header Estructural */
 .main-header {
   padding: 0 24px;
   display: flex;
@@ -304,7 +323,6 @@ const toggleTheme = () => {
   line-height: 64px;
   transition: all 0.3s;
 }
-
 .header-left,
 .header-right {
   display: flex;
@@ -320,7 +338,6 @@ const toggleTheme = () => {
   font-size: 1.1rem;
   font-weight: 600;
 }
-
 .icon-btn {
   font-size: 18px;
   transition: opacity 0.2s;
@@ -329,7 +346,6 @@ const toggleTheme = () => {
   opacity: 0.8;
   background: rgba(255, 255, 255, 0.1);
 }
-
 .user-pill {
   background: rgba(255, 255, 255, 0.15);
   padding: 0 15px;
