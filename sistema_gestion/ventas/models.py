@@ -1,16 +1,13 @@
-# ventas/models.py (VERSIÓN CORREGIDA Y RESTAURADA)
+# ventas/models.py (VERSIÓN COMPLETA: ASOCIADOS MÚLTIPLES + RECIBOS + DISEÑOS)
 
 from django.db import models, transaction
-from django.db.models import Sum
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from decimal import Decimal
 from djmoney.money import Money
-from inventario.services import StockService
-from django.db.models.signals import post_save, pre_delete
-from django.dispatch import receiver
 from django.conf import settings
-from finanzas.models import TipoValor, CuentaFondo, Cheque, MovimientoFondo, Banco
+from finanzas.models import TipoValor, CuentaFondo, Cheque, MovimientoFondo, Banco, Tarjeta, PlanTarjeta, PlanCuota
+from inventario.services import StockManager
 
 
 def get_default_moneda_pk():
@@ -23,6 +20,7 @@ def get_default_moneda_pk():
 
 
 # --- CLIENTE, COMPROBANTES, LISTAS ---
+
 class Cliente(models.Model):
     entidad = models.OneToOneField('entidades.Entidad', on_delete=models.CASCADE, primary_key=True)
     price_list = models.ForeignKey(
@@ -54,6 +52,11 @@ class ComprobanteVenta(models.Model):
         CONTADO = 'CO', 'Contado'
         CTA_CTE = 'CC', 'Cuenta Corriente'
 
+    class ConceptoNC(models.TextChoices):
+        DEVOLUCION = 'DEV', 'Devolución de Mercadería (Mueve Stock)'
+        FINANCIERO = 'FIN', 'Ajuste Financiero / Descuento (No Mueve Stock)'
+        ANULACION = 'ANU', 'Anulación de Operación (Mueve Stock)'
+
     serie = models.ForeignKey('parametros.SerieDocumento', on_delete=models.PROTECT,
                               null=True, blank=True, verbose_name="Serie / Talonario")
     tipo_comprobante = models.ForeignKey('parametros.TipoComprobante', on_delete=models.PROTECT,
@@ -73,6 +76,23 @@ class ComprobanteVenta(models.Model):
     stock_aplicado = models.BooleanField(default=False, editable=False)
     observaciones = models.TextField(blank=True, null=True, verbose_name="Observaciones / Notas")
 
+    comprobantes_asociados = models.ManyToManyField(
+        'self',
+        blank=True,
+        symmetrical=False,
+        related_name='notas_asociadas',
+        verbose_name="Comprobantes de Origen"
+    )
+
+    concepto_nota_credito = models.CharField(
+        max_length=3,
+        choices=ConceptoNC.choices,
+        null=True,
+        blank=True,
+        verbose_name="Motivo de Nota de Crédito",
+        help_text="Define si se debe reintegrar el stock o solo ajustar saldo."
+    )
+
     # --- CAMPOS AFIP ---
     cae = models.CharField(max_length=50, blank=True, null=True, verbose_name="CAE")
     vto_cae = models.DateField(blank=True, null=True, verbose_name="Vencimiento CAE")
@@ -82,17 +102,6 @@ class ComprobanteVenta(models.Model):
     afip_xml_request = models.TextField(blank=True, null=True, editable=False)
     afip_xml_response = models.TextField(blank=True, null=True, editable=False)
 
-    # --- CAMPOS NUEVOS PARA NOTA DE CRÉDITO ---
-    comprobante_asociado = models.ForeignKey(
-        'self',
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name='notas_asociadas',
-        verbose_name="Comprobante de Origen"
-    )
-
-    # Para cuando la factura es vieja (antes de usar este sistema) o externa
     referencia_externa = models.CharField(
         max_length=100,
         blank=True,
@@ -102,6 +111,15 @@ class ComprobanteVenta(models.Model):
     )
     periodo_asociado_inicio = models.DateField(null=True, blank=True, verbose_name="Periodo Asoc. Desde")
     periodo_asociado_fin = models.DateField(null=True, blank=True, verbose_name="Periodo Asoc. Hasta")
+
+    def debe_mover_stock(self):
+        if self.estado != self.Estado.CONFIRMADO:
+            return False
+        if not self.tipo_comprobante:
+            return False
+        if self.tipo_comprobante.codigo_afip in ['003', '008', '013']:
+            return self.concepto_nota_credito in [self.ConceptoNC.DEVOLUCION, self.ConceptoNC.ANULACION]
+        return self.tipo_comprobante.mueve_stock
 
     def es_electronica(self):
         return self.serie and self.serie.tipo_comprobante.codigo_afip is not None
@@ -137,15 +155,20 @@ class ComprobanteVenta(models.Model):
                     serie_lock.save()
         if self.tipo_comprobante and not self.letra:
             self.letra = self.tipo_comprobante.letra
-        from inventario.models import Deposito
+
+        # Asignar depósito por defecto si no tiene
         if not self.deposito_id and self.deposito is None:
+            from inventario.models import Deposito
             deposito_principal = Deposito.objects.filter(es_principal=True).first()
             if deposito_principal:
                 self.deposito = deposito_principal
+
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.tipo_comprobante.nombre if self.tipo_comprobante else 'Venta'} {self.numero_completo} - {self.cliente}"
+        fecha_str = self.fecha.strftime('%d/%m/%Y') if self.fecha else 'S/F'
+        tipo = self.tipo_comprobante.nombre if self.tipo_comprobante else 'Venta'
+        return f"{tipo} {self.numero_completo} ({fecha_str}) - $ {self.total:,.2f}"
 
     class Meta:
         verbose_name = "Comprobante de Venta"
@@ -164,6 +187,41 @@ class ComprobanteVentaItem(models.Model):
 
     def __str__(self):
         return f"{self.cantidad} x {self.articulo.descripcion}"
+
+    # --- VALIDACIÓN PREVENTIVA DE STOCK ---
+    def clean(self):
+        super().clean()
+        # Si el comprobante padre existe en memoria y se está confirmando
+        if self.comprobante and hasattr(self.comprobante, 'estado') and hasattr(self.comprobante, 'tipo_comprobante'):
+            if self.comprobante.estado == ComprobanteVenta.Estado.CONFIRMADO:
+                tipo = self.comprobante.tipo_comprobante
+                deposito = self.comprobante.deposito
+
+                # Solo validamos si mueve stock físico (REAL)
+                if tipo and tipo.mueve_stock and tipo.afecta_stock_fisico and deposito:
+
+                    # Verificamos si se permite negativo
+                    puede_negativo = self.articulo.permite_stock_negativo or deposito.permite_stock_negativo
+
+                    if not puede_negativo:
+                        # Consultamos saldo actual (sin bloquear DB)
+                        saldo_actual = StockManager.obtener_saldo_actual(self.articulo, deposito, 'REAL')
+
+                        # Si estamos editando un item existente, sumamos su cantidad anterior al saldo
+                        # para no contar doble la reserva.
+                        if self.pk:
+                            try:
+                                old_item = ComprobanteVentaItem.objects.get(pk=self.pk)
+                                saldo_actual += old_item.cantidad
+                            except ComprobanteVentaItem.DoesNotExist:
+                                pass
+
+                        if saldo_actual < self.cantidad:
+                            # Lanzamos el error que Django Admin debería mostrar en el campo
+                            raise ValidationError(
+                                f"Stock insuficiente en {deposito}. Disponible: {saldo_actual}. "
+                                f"Solicitado: {self.cantidad}."
+                            )
 
 
 class PriceList(models.Model):
@@ -250,30 +308,24 @@ class Recibo(models.Model):
                 serie_lock.save()
         super().save(*args, **kwargs)
 
-    # MÉTODO 1: APLICAR
     def aplicar_finanzas(self):
         if self.estado != self.Estado.CONFIRMADO or self.finanzas_aplicadas: return
 
         # Validación Balanceo
         total_valores = sum(v.monto for v in self.valores.all())
         total_imputado = sum(i.monto_imputado for i in self.imputaciones.all())
+        # Permitimos pequeña diferencia por redondeo
         if abs(total_imputado - total_valores) > Decimal('0.05'):
-            raise ValidationError(
-                f"Desbalance: Valores ${total_valores} vs Imputado ${total_imputado}.")
+            raise ValidationError(f"Desbalance: Valores ${total_valores} vs Imputado ${total_imputado}.")
         if not self.valores.exists():
             raise ValidationError("Debe ingresar valores de pago.")
 
-        # DETECTAMOS SI ES SALIDA DE DINERO
         es_salida = (self.origen == self.Origen.DEVOLUCION)
 
         with transaction.atomic():
             # A. Movimiento de Valores
             for valor in self.valores.all():
                 nuevo_cheque = None
-
-                # --- LÓGICA DE CHEQUE ORIGINAL (SOLO SI NO ES SALIDA) ---
-                # Si estamos devolviendo dinero, NO creamos un cheque "En Cartera" (que sería un cheque recibido).
-                # Solo creamos el cheque si es COBRANZA o CONTADO.
                 if not es_salida and valor.tipo.es_cheque and not valor.cheque_tercero:
                     nuevo_cheque = Cheque.objects.create(
                         numero=valor.referencia, banco=valor.banco_origen, monto=valor.monto,
@@ -283,11 +335,9 @@ class Recibo(models.Model):
                         cuit_librador=valor.cuit_librador, nombre_librador=f"Cliente: {self.cliente}"
                     )
 
-                # Movimiento de Fondo (Adaptado para salida/entrada)
                 MovimientoFondo.objects.create(
                     fecha=self.fecha,
                     cuenta=valor.destino,
-                    # Si es salida es EGRESO, sino INGRESO
                     tipo_movimiento=MovimientoFondo.TipoMov.EGRESO if es_salida else MovimientoFondo.TipoMov.INGRESO,
                     tipo_valor=valor.tipo,
                     monto_egreso=valor.monto if es_salida else 0,
@@ -297,7 +347,6 @@ class Recibo(models.Model):
                     cheque=nuevo_cheque or valor.cheque_tercero
                 )
 
-                # Actualización de Saldo (Suma o Resta)
                 if es_salida:
                     valor.destino.saldo_monto -= valor.monto
                 else:
@@ -307,9 +356,6 @@ class Recibo(models.Model):
             # B. Bajar Deuda (Imputación)
             for imputacion in self.imputaciones.all():
                 comp = imputacion.comprobante
-                # Matemáticamente siempre se resta del saldo pendiente del comprobante.
-                # Si es Factura: Debe 100 -> Pago 100 -> Debe 0.
-                # Si es Nota Crédito: Saldo a favor 100 -> Devuelvo 100 -> Saldo a favor 0.
                 comp.saldo_pendiente -= imputacion.monto_imputado
                 if comp.saldo_pendiente < 0: comp.saldo_pendiente = 0
                 comp.save()
@@ -330,7 +376,6 @@ class Recibo(models.Model):
                 comp.save()
 
             for valor in valores:
-                # Invertimos la lógica de saldo
                 if es_salida:
                     valor.destino.saldo_monto += valor.monto
                 else:
@@ -365,7 +410,10 @@ class ReciboValor(models.Model):
     recibo = models.ForeignKey(Recibo, related_name='valores', on_delete=models.CASCADE)
     tipo = models.ForeignKey(TipoValor, on_delete=models.PROTECT)
     monto = models.DecimalField(max_digits=14, decimal_places=2)
+    # Destino de los fondos (Caja o Banco)
     destino = models.ForeignKey(CuentaFondo, on_delete=models.PROTECT, verbose_name="Caja/Cuenta Destino")
+    observaciones = models.CharField(max_length=150, blank=True,
+                                     help_text="Detalle: N° Cheque, Banco, Lote Tarjeta, etc.")
     cheque_tercero = models.ForeignKey(Cheque, on_delete=models.SET_NULL, null=True, blank=True)
     banco_origen = models.ForeignKey(Banco, on_delete=models.SET_NULL, null=True, blank=True)
     referencia = models.CharField(max_length=100, blank=True)
@@ -375,91 +423,15 @@ class ReciboValor(models.Model):
     def __str__(self): return f"{self.tipo} ${self.monto}"
 
 
-# --- SIGNALS (COMENTADAS SEGÚN INSTRUCCIÓN) ---
-# Si descomentas esto, se duplica el stock. Déjalo así.
-
-'''
-@receiver(post_save, sender=ComprobanteVenta)
-def aplicar_stock_venta(sender, instance, **kwargs):
-    if not instance.tipo_comprobante: return
-    if instance.estado == ComprobanteVenta.Estado.CONFIRMADO and instance.tipo_comprobante.mueve_stock and not instance.stock_aplicado:
-        if not instance.items.exists(): return
-        signo = instance.tipo_comprobante.signo_stock
-        for item in instance.items.all():
-            cantidad_ajuste = item.cantidad * signo
-            accion = 'SUMAR' if cantidad_ajuste > 0 else 'RESTAR'
-            StockService.ajustar_stock(articulo=item.articulo, deposito=instance.deposito, cantidad=abs(cantidad_ajuste), tipo_movimiento=accion)
-        ComprobanteVenta.objects.filter(pk=instance.pk).update(stock_aplicado=True)
-'''
-
-
-@receiver(post_save, sender=Recibo)
-def trigger_finanzas_recibo(sender, instance, **kwargs):
-    if instance.estado == Recibo.Estado.ANULADO:
-        instance.revertir_finanzas()
-
-
-@receiver(pre_delete, sender=Recibo)
-def reversar_al_eliminar_recibo(sender, instance, **kwargs):
-    if instance.finanzas_aplicadas:
-        imputaciones = list(instance.imputaciones.all())
-        valores = list(instance.valores.all())
-        with transaction.atomic():
-            for imputacion in imputaciones:
-                comp = imputacion.comprobante
-                comp.saldo_pendiente += imputacion.monto_imputado
-                comp.save()
-            for valor in valores:
-                valor.destino.saldo_monto -= valor.monto
-                valor.destino.save()
-                if valor.tipo.es_cheque:
-                    Cheque.objects.filter(numero=valor.referencia, cuit_librador=valor.cuit_librador).update(
-                        estado=Cheque.Estado.ANULADO)
-
-
-from inventario.models import Articulo
-
-
-@receiver(post_save, sender=Articulo)
-def manage_default_product_price(sender, instance: Articulo, created, **kwargs):
-    if getattr(instance, '_from_pricelist_sync', False): return
-    if instance.perfil not in [Articulo.Perfil.COMPRA_VENTA, Articulo.Perfil.VENTA]: return
-    default_list = PriceList.objects.filter(is_default=True).first()
-    if not default_list: return
-    obj, created_price = ProductPrice.objects.update_or_create(product=instance, price_list=default_list,
-                                                               min_quantity=1,
-                                                               defaults={'price_monto': instance.precio_venta_monto,
-                                                                         'price_moneda': instance.precio_venta_moneda})
-
-
-@receiver(post_save, sender=ProductPrice)
-def sync_product_price_to_article(sender, instance: ProductPrice, created, **kwargs):
-    if not instance.price_list.is_default or instance.min_quantity > 1: return
-    articulo = instance.product
-    if (
-            articulo.precio_venta_monto == instance.price_monto and articulo.precio_venta_moneda == instance.price_moneda): return
-    articulo.precio_venta_monto = instance.price_monto
-    articulo.precio_venta_moneda = instance.price_moneda
-    if articulo.precio_costo_monto > 0:
-        try:
-            nueva_utilidad = ((instance.price_monto / articulo.precio_costo_monto) - 1) * 100
-            articulo.utilidad = nueva_utilidad
-        except Exception:
-            pass
-    articulo._from_pricelist_sync = True
-    articulo.save()
-
-
 class ComprobantePendienteCAE(ComprobanteVenta):
     class Meta:
-        proxy = True  # No crea tabla nueva
+        proxy = True
         verbose_name = "⚠️ Bandeja Factura Electrónica"
         verbose_name_plural = "⚠️ Bandeja Factura Electrónica (Pendientes)"
 
 
 class DisenoImpresion(models.Model):
     nombre = models.CharField(max_length=50, verbose_name="Nombre del Diseño")
-    # 1. Opción Archivo Físico (Legacy / Respaldo)
     archivo_template = models.CharField(
         max_length=100,
         default="ventas/pdf/factura_premium.html",
@@ -490,3 +462,34 @@ class DisenoImpresion(models.Model):
     class Meta:
         verbose_name = "Diseño de Impresión y Email"
         verbose_name_plural = "Diseños de Impresión y Email"
+
+
+class ComprobanteCobroItem(models.Model):
+    """
+    Permite cargar múltiples formas de pago en una sola factura.
+    """
+    comprobante = models.ForeignKey('ComprobanteVenta', on_delete=models.CASCADE, related_name='cobros_asociados')
+
+    tipo_valor = models.ForeignKey(TipoValor, on_delete=models.PROTECT)
+    monto = models.DecimalField(max_digits=14, decimal_places=2, help_text="Monto a cobrar (El sistema sumará el recargo si corresponde)")
+
+    # Destino de fondos
+    destino = models.ForeignKey(CuentaFondo, on_delete=models.PROTECT, limit_choices_to={'activa': True})
+
+    observaciones = models.CharField(max_length=100, blank=True, help_text="Detalle opcional")
+
+    # --- CAMBIO CLAVE: ELEGIR LA CUOTA ESPECÍFICA ---
+    # Antes: tarjeta_plan (PlanTarjeta) -> Solo elegía la marca
+    # Ahora: opcion_cuota (PlanCuota) -> Elige "Visa Galicia - 3 Cuotas (1.15)"
+    opcion_cuota = models.ForeignKey(PlanCuota, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="Plan y Cuotas")
+
+    tarjeta_lote = models.CharField(max_length=20, blank=True, verbose_name="Lote")
+    tarjeta_cupon = models.CharField(max_length=50, blank=True, verbose_name="Cupón")
+
+    # Este campo es opcional, si el plan ya define las cuotas, no hace falta.
+    # Pero si quieres permitir editarlo manual, déjalo. Si no, bórralo.
+    # Por compatibilidad con el admin, lo dejo, pero lo ideal es sacarlo si usas Plan.
+    # Si lo borras aquí, bórralo del admin también.
+
+    def __str__(self):
+        return f"{self.tipo_valor}: ${self.monto}"
