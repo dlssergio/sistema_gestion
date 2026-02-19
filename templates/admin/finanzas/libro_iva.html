@@ -1,0 +1,177 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static humanize %}
+
+{% block extrahead %}
+    {{ block.super }}
+    <style>
+        @media print {
+            #header, .breadcrumbs, .nav-global, #user-tools, .object-tools { display: none !important; }
+            form { display: none !important; }
+            #content-main { margin: 0; padding: 0; width: 100%; }
+            body { background: white; font-size: 10pt; }
+            .module {
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            tr { page-break-inside: avoid; }
+        }
+
+        .filter-form {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+    </style>
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+    <a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+    &rsaquo; <a href="{% url 'admin:app_list' app_label='finanzas' %}">Finanzas</a>
+    &rsaquo; Libro IVA
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <h1 style="margin: 0;">Libro IVA {{ tipo_actual }}</h1>
+        <p style="color: #666; margin: 0;">Período: {{ mes_actual }}/{{ anio_actual }}</p>
+    </div>
+
+    <form method="get" class="filter-form">
+        <div>
+            <label for="tipo" style="font-weight: bold;">Tipo:</label>
+            <select name="tipo" id="tipo">
+                <option value="VENTAS" {% if tipo_actual == 'VENTAS' %}selected{% endif %}>VENTAS (Débito Fiscal)</option>
+                <option value="COMPRAS" {% if tipo_actual == 'COMPRAS' %}selected{% endif %}>COMPRAS (Crédito Fiscal)</option>
+            </select>
+        </div>
+        <div>
+            <label for="mes" style="font-weight: bold;">Mes:</label>
+            <select name="mes" id="mes">
+                {% for m in meses %}
+                <option value="{{ m }}" {% if mes_actual == m %}selected{% endif %}>{{ m }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label for="anio" style="font-weight: bold;">Año:</label>
+            <select name="anio" id="anio">
+                {% for a in anios %}
+                <option value="{{ a }}" {% if anio_actual == a %}selected{% endif %}>{{ a }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="button" style="background: #333;">🔍 Filtrar</button>
+
+        <button type="button" onclick="window.print()" class="button" style="margin-left: 10px;">🖨️ Imprimir</button>
+
+        <a href="{% url 'admin:finanzas_libro_iva_export' %}?mes={{ mes_actual }}&anio={{ anio_actual }}&tipo={{ tipo_actual }}"
+           class="button" style="margin-left: 10px; background: #28a745; text-decoration: none; color: white; padding: 4px 10px; border-radius: 4px;">
+           📥 Exportar Excel
+        </a>
+    </form>
+
+    <div class="module" style="display: flex; gap: 20px; margin-bottom: 20px; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 200px; background: #e8f5e9; padding: 15px; border-radius: 4px; border-left: 5px solid green;">
+            <h3 style="margin-top: 0; color: #2e7d32;">Total Facturado</h3>
+            <p style="font-size: 1.5em; font-weight: bold; margin-bottom: 0;">
+                $ {{ data.totales.total|floatformat:2|intcomma }}
+            </p>
+        </div>
+        <div style="flex: 1; min-width: 200px; background: #e3f2fd; padding: 15px; border-radius: 4px; border-left: 5px solid #2196f3;">
+            <h3 style="margin-top: 0; color: #1565c0;">Total IVA</h3>
+            <p style="font-size: 1.5em; font-weight: bold; margin-bottom: 0;">
+                {# Sumamos todos los IVAs dinámicos #}
+                {% with total_iva=0 %}
+                    {# Lógica simple de vista, el valor real viene en el reporte, aquí sumamos visualmente #}
+                    $
+                    {% for k, v in data.totales.ivas.items %}
+                        {# Solo una suma visual rápida si se quisiera, sino usamos JS o backend #}
+                    {% endfor %}
+                    {# Mejor mostramos la resta: Total - Neto - Otros #}
+                    {{ data.totales.total|add:data.totales.neto_gravado|add:data.totales.otros_impuestos|floatformat:2|intcomma }}
+                    (Ver detalle abajo)
+                {% endwith %}
+            </p>
+        </div>
+    </div>
+
+    <div class="module" style="overflow-x: auto;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 12px; min-width: 800px;">
+            <thead>
+                <tr style="background: #333; color: white;">
+                    <th style="padding: 8px;">Fecha</th>
+                    <th style="padding: 8px;">Comprobante</th>
+                    <th style="padding: 8px;">Razón Social / CUIT</th>
+                    <th style="padding: 8px; text-align: right;">Neto Grav.</th>
+
+                    {% for col in data.columnas_iva %}
+                    <th style="padding: 8px; text-align: right;">IVA {{ col }}%</th>
+                    {% endfor %}
+
+                    <th style="padding: 8px; text-align: right;">Otros Imp.</th>
+                    <th style="padding: 8px; text-align: right;">Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for linea in data.lineas %}
+                <tr style="border-bottom: 1px solid #ddd; background-color: {% cycle '#fff' '#f9f9f9' %};">
+                    <td style="padding: 6px;">{{ linea.fecha|date:"d/m/Y" }}</td>
+                    <td style="padding: 6px;">{{ linea.comprobante }}</td>
+                    <td style="padding: 6px;">
+                        <strong>{{ linea.razon_social }}</strong><br>
+                        <span style="color: #666;">{{ linea.cuit }}</span>
+                    </td>
+                    <td style="text-align: right; padding: 6px;">{{ linea.neto|floatformat:2|intcomma }}</td>
+
+                    {% for col in data.columnas_iva %}
+                        <td style="text-align: right; padding: 6px;">
+                            {# Buscamos el valor en el diccionario 'ivas' de la fila usando la clave 'col' #}
+                            {# Django template lookup dinámico es complejo, usamos un custom tag o un truco #}
+                            {# Truco simple: iteramos y si coincide mostramos #}
+                            {% for k, v in linea.ivas.items %}
+                                {% if k == col %}{{ v|floatformat:2|intcomma }}{% endif %}
+                            {% endfor %}
+                        </td>
+                    {% endfor %}
+
+                    <td style="text-align: right; padding: 6px;">{{ linea.otros|floatformat:2|intcomma }}</td>
+                    <td style="text-align: right; padding: 6px; font-weight: bold;">{{ linea.total|floatformat:2|intcomma }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="10" style="padding: 30px; text-align: center; color: #666;">
+                        No hay movimientos fiscales registrados para este período.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot style="background: #eee; font-weight: bold; border-top: 2px solid #999;">
+                <tr>
+                    <td colspan="3" style="text-align: right; padding: 10px;">TOTALES GENERALES:</td>
+                    <td style="text-align: right; padding: 10px;">{{ data.totales.neto_gravado|floatformat:2|intcomma }}</td>
+
+                    {% for col in data.columnas_iva %}
+                        <td style="text-align: right; padding: 10px;">
+                            {% for k, v in data.totales.ivas.items %}
+                                {% if k == col %}{{ v|floatformat:2|intcomma }}{% endif %}
+                            {% endfor %}
+                        </td>
+                    {% endfor %}
+
+                    <td style="text-align: right; padding: 10px;">{{ data.totales.otros_impuestos|floatformat:2|intcomma }}</td>
+                    <td style="text-align: right; padding: 10px; font-size: 1.1em;">{{ data.totales.total|floatformat:2|intcomma }}</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -10,6 +10,8 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     # Una sola línea para gobernar toda la API.
     path('api/', include('api.urls')),
+    # API de Usuarios (Login/Logout para Vue)
+    path('api/auth/', include('users.urls')),
 ]
 
 if settings.DEBUG:

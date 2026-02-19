@@ -1,4 +1,4 @@
-# parametros/afip.py (FIX XML: CmpAsoc -> CbtesAsoc)
+# parametros/afip.py
 import os
 import sys
 import shutil
@@ -18,7 +18,7 @@ from pyafipws.wsfev1 import WSFEv1
 # Modelos
 from .models import AfipCertificado, AfipToken, ConfiguracionEmpresa
 
-# Logs para verificar que el XML salga igual a tu ejemplo
+# Logs para verificar el XML
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('zeep.transports').setLevel(logging.DEBUG)
 logging.getLogger('pysimplesoap.client').setLevel(logging.DEBUG)
@@ -72,7 +72,10 @@ class AfipManager:
         openssl_bin = "openssl"
         found = False
         for r in rutas:
-            if os.path.exists(r): openssl_bin = r; found = True; break
+            if os.path.exists(r):
+                openssl_bin = r
+                found = True
+                break
 
         safe_bin = f'"{openssl_bin}"' if " " in openssl_bin and not openssl_bin.startswith('"') else openssl_bin
         WSAA.OPENSSL = safe_bin
@@ -151,6 +154,39 @@ class AfipManager:
         except Exception:
             return -1
 
+    # --- NUEVO MÉTODO AGREGADO: CONSULTA DE EXISTENCIA ---
+    def consultar_comprobante(self, tipo_cbte, pto_vta, nro_cbte):
+        """
+        Consulta a AFIP si un comprobante específico ya existe y devuelve sus datos.
+        """
+        try:
+            wsfe = self._conectar_wsfe()
+            auth = {'Token': wsfe.Token, 'Sign': wsfe.Sign, 'Cuit': wsfe.Cuit}
+            cmp_consulta = {'CbteTipo': tipo_cbte, 'PtoVta': pto_vta, 'CbteNro': nro_cbte}
+
+            response = wsfe.client.FECompConsultar(Auth=auth, FeCompConsReq=cmp_consulta)
+
+            result = None
+            if hasattr(response, 'FECompConsultarResult'):
+                result = response.FECompConsultarResult
+            elif isinstance(response, dict) and 'FECompConsultarResult' in response:
+                result = response['FECompConsultarResult']
+
+            if result and 'ResultGet' in result:
+                datos = result['ResultGet']
+                if 'CodAutorizacion' in datos and datos['CodAutorizacion']:
+                    return {
+                        'cae': datos['CodAutorizacion'],
+                        'vto': datos['FchVto'],
+                        'resultado': datos.get('Resultado', 'A')
+                    }
+            return None
+        except Exception as e:
+            print(f"⚠️ Error consultando AFIP: {e}")
+            return None
+
+    # -----------------------------------------------------
+
     def consultar_estado_servicio(self):
         status = {}
         try:
@@ -186,11 +222,31 @@ class AfipManager:
         status['numeracion'] = lista_info
         return status
 
-    # --- EMISIÓN DE COMPROBANTE (BASADO EN TU XML DE EJEMPLO) ---
+    # --- EMISIÓN DE COMPROBANTE ---
     def emitir_comprobante(self, comprobante):
         if not comprobante.es_electronica(): return False
 
-        print(f"\n🚀 PROCESANDO COMPROBANTE #{comprobante.numero} (XML STRUCTURE FIX)")
+        print(f"\n🚀 PROCESANDO COMPROBANTE #{comprobante.numero} (MULTI-ORIGEN + SAFE)")
+
+        # 1. RECUPERACIÓN DE FALLOS (Blindaje)
+        tipo_cbte = int(comprobante.tipo_comprobante.codigo_afip)
+        pto_vta = int(comprobante.punto_venta)
+        numero = int(comprobante.numero)
+
+        datos_existentes = self.consultar_comprobante(tipo_cbte, pto_vta, numero)
+        if datos_existentes:
+            print(f"♻️ RECUPERADO: El comprobante {numero} ya existía en AFIP. Asignando CAE...")
+            comprobante.cae = datos_existentes['cae']
+            try:
+                comprobante.vto_cae = datetime.strptime(datos_existentes['vto'], '%Y%m%d').date()
+            except:
+                pass
+            comprobante.afip_resultado = datos_existentes['resultado']
+            comprobante.afip_error = None
+            comprobante.afip_observaciones = "Comprobante recuperado automáticamente."
+            # FIX RECURSION: Usamos update_fields
+            comprobante.save(update_fields=['cae', 'vto_cae', 'afip_resultado', 'afip_error', 'afip_observaciones'])
+            return True
 
         def get_val(obj):
             val = 0.0
@@ -204,15 +260,19 @@ class AfipManager:
 
         wsfe = self._conectar_wsfe()
 
-        tipo_cbte = int(comprobante.tipo_comprobante.codigo_afip)
-        pto_vta = int(comprobante.punto_venta)
-
         try:
             ultimo = self.obtener_ultimo_numero(tipo_cbte, pto_vta)
             if ultimo == -1: raise Exception("Error conectando a AFIP.")
-            if comprobante.numero != (ultimo + 1):
-                raise Exception(f"Error Numeración: Sistema intenta {comprobante.numero}, AFIP espera {ultimo + 1}")
+
+            # Validación de secuencia estricta
+            if numero <= ultimo:
+                raise Exception(f"Desincronización: Sistema intenta {numero}, AFIP ya tiene {ultimo}.")
+            if numero != (ultimo + 1):
+                raise Exception(f"Error Numeración: Sistema intenta {numero}, AFIP espera {ultimo + 1}")
         except Exception as e:
+            comprobante.afip_error = str(e)
+            # FIX RECURSION
+            comprobante.save(update_fields=['afip_error'])
             raise Exception(str(e))
 
         entidad = comprobante.cliente.entidad
@@ -236,7 +296,7 @@ class AfipManager:
         if hasattr(entidad, 'situacion_iva'):
             id_iva_receptor = int(entidad.situacion_iva.codigo_afip)
 
-        # 1. DICCIONARIO BASE MANUAL (Igual al que funciona en Facturas)
+        # 1. DICCIONARIO BASE
         detalle_factura = {
             'Concepto': 1,
             'DocTipo': doc_tipo,
@@ -255,8 +315,8 @@ class AfipManager:
             'CondicionIVAReceptorId': id_iva_receptor
         }
 
-        # 2. LÓGICA DE ASOCIADOS CORREGIDA (CmpAsoc -> CbtesAsoc)
-        cmp_asoc_item = None
+        # --- 2. LÓGICA DE ASOCIADOS MULTI-ORIGEN CON FILTRO INTELIGENTE ---
+        lista_cbtes_asoc = []
 
         cuit_emisor = 0
         try:
@@ -264,44 +324,55 @@ class AfipManager:
         except:
             pass
 
-        # Función helper para formatear fechas
         def fmt_fecha(dt):
             return dt.strftime('%Y%m%d') if dt else comprobante.fecha.strftime('%Y%m%d')
 
-        if getattr(comprobante, 'comprobante_asociado_id', None):
-            asoc = comprobante.comprobante_asociado
-            cmp_asoc_item = {
-                'Tipo': int(asoc.tipo_comprobante.codigo_afip),
-                'PtoVta': int(asoc.punto_venta),
-                'Nro': int(asoc.numero),
-                'Cuit': cuit_emisor,
-                # Agregamos Fecha que aparece en tu XML ejemplo
-                'CbteFch': fmt_fecha(asoc.fecha)
-            }
+        # A) Buscamos asociados en la base de datos (ManyToManyField)
+        if hasattr(comprobante, 'comprobantes_asociados') and comprobante.comprobantes_asociados.exists():
+            for asoc in comprobante.comprobantes_asociados.all():
+
+                # VALIDACIÓN CRÍTICA: SOLO ENVIAMOS A AFIP SI EL ORIGEN ES FISCAL
+                if not asoc.tipo_comprobante or not asoc.tipo_comprobante.codigo_afip:
+                    print(f"⏩ Omitiendo asociado interno: {asoc} (No es fiscal)")
+                    continue
+
+                try:
+                    item = {
+                        'Tipo': int(asoc.tipo_comprobante.codigo_afip),
+                        'PtoVta': int(asoc.punto_venta),
+                        'Nro': int(asoc.numero),
+                        'Cuit': cuit_emisor,
+                        'CbteFch': fmt_fecha(asoc.fecha)
+                    }
+                    lista_cbtes_asoc.append(item)
+                except (ValueError, TypeError):
+                    print(f"⚠️ Error procesando asociado {asoc}: Datos AFIP inválidos.")
+                    continue
+
+        # B) Si no hay en DB, buscamos en referencia externa (Fallback manual)
         elif comprobante.referencia_externa:
             try:
                 parts = comprobante.referencia_externa.split('-')
                 if len(parts) == 2:
+                    # Deducimos el tipo según la letra de la Nota actual
                     tipo = 1 if comprobante.letra == 'A' else (6 if comprobante.letra == 'B' else 11)
-                    cmp_asoc_item = {
+                    item = {
                         'Tipo': tipo,
                         'PtoVta': int(parts[0]),
                         'Nro': int(parts[1]),
                         'Cuit': cuit_emisor,
-                        'CbteFch': fmt_fecha(None)  # Usamos hoy si no hay fecha origen
+                        'CbteFch': fmt_fecha(None)
                     }
+                    lista_cbtes_asoc.append(item)
             except:
                 pass
 
-        # === CORRECCIÓN ESTRUCTURAL XML ===
-        # Cambiamos 'CmpAsoc' por 'CbtesAsoc' para coincidir con tu ejemplo XML válido.
-        if cmp_asoc_item:
-            print(f"DEBUG: Agregando CbtesAsoc: {cmp_asoc_item}")
-            # Estructura: <CbtesAsoc> <CbteAsoc> ... </CbteAsoc> </CbtesAsoc>
-            detalle_factura['CbtesAsoc'] = {'CbteAsoc': [cmp_asoc_item]}
+        # === INSERCIÓN EN EL PAYLOAD ===
+        if lista_cbtes_asoc:
+            print(f"DEBUG: Asociando {len(lista_cbtes_asoc)} comprobantes FISCALES.")
+            detalle_factura['CbtesAsoc'] = {'CbteAsoc': lista_cbtes_asoc}
 
-            # 3. IVA (Solo si no es Monotributo)
-        # Validación de usuario: "❌ Informás <Iva> en comprobantes C" -> Aquí evitamos eso.
+        # 3. IVA
         if iva > 0 and not es_monotributo:
             detalle_factura['Iva'] = {'AlicIva': [{'Id': 5, 'BaseImp': neto, 'Importe': iva}]}
 
@@ -331,7 +402,8 @@ class AfipManager:
                         msg = " | ".join([e['Msg'] for e in errs if 'Msg' in e])
 
                     comprobante.afip_error = f"Rechazo: {msg}"
-                    comprobante.save()
+                    # FIX RECURSION
+                    comprobante.save(update_fields=['afip_error'])
                     raise Exception(f"Rechazo AFIP: {msg}")
 
             if 'FeDetResp' not in root_resp: raise Exception(f"Respuesta inesperada: {root_resp}")
@@ -352,7 +424,8 @@ class AfipManager:
                 comprobante.afip_resultado = "A"
                 comprobante.afip_observaciones = "Aprobado"
                 comprobante.afip_error = None
-                comprobante.save()
+                # FIX RECURSION
+                comprobante.save(update_fields=['cae', 'vto_cae', 'afip_resultado', 'afip_error', 'afip_observaciones'])
                 print("🎉 ¡CAE OBTENIDO!")
                 return True
             else:
@@ -367,12 +440,14 @@ class AfipManager:
 
                 err_final = " | ".join(msgs)
                 comprobante.afip_error = f"Rechazado: {err_final}"
-                comprobante.save()
+                # FIX RECURSION
+                comprobante.save(update_fields=['afip_error'])
                 raise Exception(f"Rechazo AFIP: {err_final}")
 
         except Exception as e:
             err_msg = str(e)
             print(f"❌ Error: {err_msg}")
             comprobante.afip_error = err_msg
-            comprobante.save()
+            # FIX RECURSION
+            comprobante.save(update_fields=['afip_error'])
             raise Exception(err_msg)

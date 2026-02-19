@@ -29,15 +29,30 @@ class TipoComprobante(models.Model):
     codigo_afip = models.CharField(max_length=3, blank=True, null=True, help_text="Código de AFIP si corresponde")
     letra = models.CharField(max_length=1, blank=True, null=True, help_text="A, B, C, X, R...")
 
-    # --- NUEVOS CAMPOS DE COMPORTAMIENTO (Reemplazan a 'afecta_stock') ---
+    # --- NUEVOS CAMPOS DE COMPORTAMIENTO ---
 
     # 1. Clasificación
     clase = models.CharField(max_length=1, choices=CLASE_CHOICES, default='V', verbose_name="Clase de Comprobante")
 
     # 2. Comportamiento de Stock
-    mueve_stock = models.BooleanField(default=False, verbose_name="¿Mueve Stock?")
+    mueve_stock = models.BooleanField(default=False, verbose_name="¿Es Movimiento de Stock?",
+                                      help_text="Interruptor general. Si está apagado, ignora las opciones de abajo.")
+
     signo_stock = models.IntegerField(choices=SIGNO_STOCK_CHOICES, default=0, verbose_name="Sentido del Stock",
                                       help_text="Ej: Venta resta (-1), Compra suma (+1), Presupuesto (0)")
+
+    # === NUEVA LÓGICA GRANULAR ===
+    afecta_stock_fisico = models.BooleanField(
+        default=True,
+        verbose_name="¿Mueve Stock Físico (Real)?",
+        help_text="Si se marca, aumentará o disminuirá la cantidad real en estantería."
+    )
+
+    afecta_stock_comprometido = models.BooleanField(
+        default=False,
+        verbose_name="¿Mueve Stock Comprometido (Reservas)?",
+        help_text="Si se marca, aumentará o disminuirá la columna de 'Reservas/Compromisos'."
+    )
 
     # 3. Comportamiento Financiero
     mueve_cta_cte = models.BooleanField(default=True, verbose_name="¿Afecta Cta. Cte?",
@@ -54,8 +69,6 @@ class TipoComprobante(models.Model):
     numeracion_automatica = models.BooleanField(default=True,
                                                 help_text="Si el sistema asigna el número (False para facturas de proveedores)")
 
-
-
     def __str__(self):
         return f"{self.nombre} ({self.letra or 'X'})"
 
@@ -63,6 +76,19 @@ class TipoComprobante(models.Model):
         verbose_name = "Tipo de Comprobante"
         verbose_name_plural = "Tipos de Comprobante"
         ordering = ['nombre']
+
+    @property
+    def es_nota_credito(self):
+        """
+        Devuelve True si el código AFIP corresponde a una Nota de Crédito.
+        Códigos comunes: 003 (A), 008 (B), 013 (C), 020 (A Mipyme), etc.
+        """
+        codigos_nc = ['003', '008', '013', '020', '021', '025', '112', '117']
+        if self.codigo_afip:
+            return self.codigo_afip in codigos_nc
+
+        # Fallback por nombre si no hay código AFIP
+        return 'NOTA DE CREDITO' in self.nombre.upper() or 'N/C' in self.nombre.upper()
 
 
 class Contador(models.Model):
@@ -85,7 +111,6 @@ class Moneda(models.Model):
     es_base = models.BooleanField(default=False, help_text="Marcar si esta es la moneda base del sistema.",
                                   verbose_name="¿Es Moneda Base?")
 
-    # MEJORA: El __str__ es más informativo para los selectores del admin.
     def __str__(self): return f"{self.simbolo} - {self.nombre}"
 
     def save(self, *args, **kwargs):
@@ -143,7 +168,7 @@ class Localidad(models.Model):
         unique_together = ('nombre', 'provincia')
 
 
-# --- ARQUITECTURA DE IMPUESTOS ROBUSTA (NUEVA) ---
+# --- ARQUITECTURA DE IMPUESTOS ---
 
 class CategoriaImpositiva(models.Model):
     nombre = models.CharField(max_length=100, unique=True)
@@ -245,9 +270,15 @@ class SerieDocumento(models.Model):
     # Configuración de Numeración
     ultimo_numero = models.PositiveIntegerField(default=0, verbose_name="Último Número Usado")
 
+    solicitar_cae_automaticamente = models.BooleanField(
+        default=False,
+        verbose_name="Solicitar CAE Automático",
+        help_text="Si se activa, el sistema intentará conectar con AFIP inmediatamente al confirmar la venta. Si falla, quedará pendiente."
+    )
+
     es_manual = models.BooleanField(default=False,
                                     verbose_name="¿Es numeración manual?",
-                                    help_text="Si se marca, el usuario debe escribir el número (ej: facturas viejas). Si no, es automático.")
+                                    help_text="Si se marca, el usuario escribe el número (factureros papel). Si no, el sistema numera y/o pide CAE.")
 
     # Automatización
     deposito_defecto = models.ForeignKey('inventario.Deposito', on_delete=models.SET_NULL,
@@ -260,7 +291,7 @@ class SerieDocumento(models.Model):
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 
     diseno_impresion = models.ForeignKey(
-        'ventas.DisenoImpresion',  # <--- ASÍ: Entre comillas y con el nombre de la app antes.
+        'ventas.DisenoImpresion',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -286,29 +317,24 @@ class ConfiguracionEmpresa(models.Model):
     Datos fiscales y de configuración visual de la empresa (Tenant).
     Solo puede existir UNA instancia por cliente.
     """
-    # Vinculamos a una Entidad para reutilizar CUIT, Dirección, etc.
     entidad = models.OneToOneField(
         'entidades.Entidad',
         on_delete=models.PROTECT,
         verbose_name="Entidad Fiscal"
     )
 
-    # Datos visuales
     logo = models.ImageField(upload_to='logos_empresa/', null=True, blank=True)
     nombre_fantasia = models.CharField(max_length=200, help_text="Nombre comercial para el ticket")
 
-    # Datos fiscales adicionales no cubiertos en Entidad
     inicio_actividades = models.DateField(verbose_name="Inicio de Actividades")
     ingresos_brutos = models.CharField(max_length=50, verbose_name="N° Ingresos Brutos")
 
-    # Configuración operativa
     moneda_principal = models.ForeignKey(
         'Moneda',
         on_delete=models.PROTECT,
         related_name='configuracion_principal'
     )
 
-    # --- CONFIGURACIÓN AFIP ---
     usar_factura_electronica = models.BooleanField(
         default=True,
         verbose_name="Habilitar Factura Electrónica",
@@ -337,7 +363,7 @@ class ConfiguracionEmpresa(models.Model):
             raise ValidationError("Ya existe una Configuración para esta empresa. Solo se permite una.")
 
     def save(self, *args, **kwargs):
-        self.full_clean()  # Llama al clean() antes de guardar
+        self.full_clean()
         super().save(*args, **kwargs)
 
 
@@ -349,11 +375,8 @@ class AfipCertificado(models.Model):
     Soporta rotación (historial) y múltiples entornos (Homologación/Producción).
     """
     nombre = models.CharField(max_length=100, help_text="Ej: Certificado 2024-2026")
-
-    # Archivos
     certificado = models.FileField(upload_to='afip/certs/', verbose_name="Certificado (.crt)")
     clave_privada = models.FileField(upload_to='afip/keys/', verbose_name="Clave Privada (.key)")
-
     cuit = models.CharField(max_length=11, help_text="CUIT de la empresa emisora (sin guiones)")
 
     # Automatización Enterprise
@@ -384,7 +407,6 @@ class AfipCertificado(models.Model):
         Al guardar, abrimos el archivo .crt, lo parseamos criptográficamente
         y extraemos la fecha de vencimiento real para evitar errores humanos.
         """
-        # Solo procesamos si hay un certificado cargado
         if self.certificado:
             try:
                 # 1. Leemos el archivo (funciona tanto para subidas nuevas en memoria como archivos en disco)
@@ -466,4 +488,3 @@ class ConfiguracionSMTP(models.Model):
     class Meta:
         verbose_name = "Configuración de Correo"
         verbose_name_plural = "Configuraciones de Correo"
-

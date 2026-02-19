@@ -1,4 +1,4 @@
-# compras/admin.py
+# compras/admin.py (VERSIÓN FINAL ENTERPRISE: E-CHEQ + FINANZAS)
 
 from django.contrib import admin
 from django.urls import path, reverse
@@ -19,7 +19,6 @@ from .models import (
     ListaPreciosProveedor, ItemListaPreciosProveedor,
     OrdenPago, OrdenPagoImputacion, OrdenPagoValor
 )
-# Importamos la nueva vista get_comprobante_info
 from .views import get_precio_proveedor_json, calcular_totales_compra_api, get_comprobante_info
 from parametros.models import Moneda
 from ventas.services import TaxCalculatorService
@@ -125,6 +124,22 @@ class ProveedorAdmin(admin.ModelAdmin):
     filter_horizontal = ('roles',)
     actions = ['generar_orden_pago']
 
+    fieldsets = (
+        ('Datos Generales', {
+            'fields': ('entidad', 'codigo_proveedor', 'nombre_fantasia', 'roles')
+        }),
+        ('Financiero', {
+            'fields': ('limite_credito',)
+        }),
+        ('Impuestos y Retenciones', {
+            'fields': (
+                ('regimen_ganancias', 'regimen_iibb'),
+                ('situacion_iibb', 'nro_iibb')
+            ),
+            'description': 'Configure aquí los regímenes por defecto para el cálculo automático en Órdenes de Pago.'
+        }),
+    )
+
     def get_razon_social(self, obj):
         return obj.entidad.razon_social
 
@@ -199,13 +214,12 @@ class ComprobanteCompraAdmin(admin.ModelAdmin):
     list_filter = ('estado', 'proveedor', 'fecha', 'tipo_comprobante', 'condicion_compra')
     search_fields = ('numero', 'proveedor__entidad__razon_social')
     inlines = [ComprobanteCompraItemInline]
-    autocomplete_fields = ['proveedor', 'serie']
+    autocomplete_fields = ['proveedor', 'serie', 'comprobante_origen']
     readonly_fields = (
         'letra',
         'subtotal',
         'impuestos_desglosados',
         'total',
-        'comprobante_origen',
         'saldo_pendiente'
     )
 
@@ -220,6 +234,10 @@ class ComprobanteCompraAdmin(admin.ModelAdmin):
                 ('tipo_comprobante', 'estado'),
                 'condicion_compra'
             )
+        }),
+        ('Vinculación (Circuito de Compras)', {
+            'fields': ('comprobante_origen',),
+            'description': 'Si es una Factura/Remito, seleccione la Orden de Compra previa para descontar el stock "A Recibir".'
         }),
         ('Identificación', {
             'fields': (
@@ -270,6 +288,18 @@ class ComprobanteCompraAdmin(admin.ModelAdmin):
         if 'app_label' in request.GET and request.GET['model_name'] == 'ordenpagoimputacion':
             queryset = queryset.filter(estado=ComprobanteCompra.Estado.CONFIRMADO, saldo_pendiente__gt=0)
         return queryset, use_distinct
+
+    # Filtro inteligente para el campo comprobante_origen
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        # Si estamos editando un comprobante existente
+        if obj and 'comprobante_origen' in form.base_fields:
+            # Filtramos para que solo aparezcan comprobantes del MISMO PROVEEDOR
+            # y que no sea el mismo comprobante que estamos editando.
+            form.base_fields['comprobante_origen'].queryset = ComprobanteCompra.objects.filter(
+                proveedor=obj.proveedor
+            ).exclude(pk=obj.pk)
+        return form
 
     def save_formset(self, request, form, formset, change):
         super().save_formset(request, form, formset, change)
@@ -322,14 +352,14 @@ class ItemListaPreciosProveedorAdmin(admin.ModelAdmin):
     autocomplete_fields = ('articulo', 'lista_precios')
 
 
-# --- ADMIN DE ÓRDENES DE PAGO ---
+# ========================================================
+#  ADMINISTRACIÓN DE ÓRDENES DE PAGO (TESORERÍA)
+# ========================================================
 
 class OrdenPagoImputacionInline(admin.TabularInline):
     model = OrdenPagoImputacion
     extra = 1
     autocomplete_fields = ['comprobante']
-
-    # CAMPO VISUAL SOLICITADO
     fields = ('comprobante', 'total_original_display', 'monto_imputado')
     readonly_fields = ('total_original_display',)
 
@@ -343,7 +373,12 @@ class OrdenPagoValorInline(admin.TabularInline):
     model = OrdenPagoValor
     extra = 1
     autocomplete_fields = ['origen', 'cheque_tercero']
-
+    # === AQUÍ ESTÁ EL CAMBIO CLAVE: Agregamos los campos nuevos ===
+    fields = (
+        ('tipo', 'monto', 'origen'),
+        ('cheque_tercero', 'referencia'),
+        ('cheque_propio_nro', 'es_echeq', 'fecha_pago_cheque')
+    )
 
 @admin.register(OrdenPago)
 class OrdenPagoAdmin(admin.ModelAdmin):
@@ -359,7 +394,6 @@ class OrdenPagoAdmin(admin.ModelAdmin):
         ('Auditoría', {'fields': ('creado_por', 'finanzas_aplicadas', 'observaciones')})
     )
 
-    # CORRECCIÓN: Registramos el script y la URL de la API
     class Media:
         js = ('admin/js/orden_pago_admin.js',)
 

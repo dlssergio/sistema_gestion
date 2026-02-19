@@ -1,0 +1,90 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static humanize %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+<a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+&rsaquo; <a href="{% url 'admin:app_list' app_label='inventario' %}">Inventario</a>
+&rsaquo; Valorización
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <div>
+            <h1 style="margin: 0;">Reporte de Valorización de Stock</h1>
+            <p style="color: #666; margin-top: 5px;">
+                Alcance: <strong>{{ nombre_deposito }}</strong> | Emisión: {{ fecha_emision|date:"d/m/Y H:i" }}
+            </p>
+        </div>
+
+        <form method="get" style="background: #f8f9fa; padding: 10px; border-radius: 5px; border: 1px solid #ddd;">
+            <label for="deposito">Filtrar por Depósito:</label>
+            <select name="deposito" id="deposito" onchange="this.form.submit()">
+                <option value="">-- TODOS --</option>
+                {% for dep in depositos %}
+                <option value="{{ dep.pk }}" {% if deposito_actual == dep.pk %}selected{% endif %}>
+                    {{ dep.nombre }}
+                </option>
+                {% endfor %}
+            </select>
+            <a href="?" class="button" style="margin-left: 10px; font-size: 11px;">Limpiar</a>
+            <button type="button" onclick="window.print()" class="button" style="background: #333; margin-left: 10px;">🖨️ Imprimir</button>
+        </form>
+    </div>
+
+    <div class="module">
+        <table style="width: 100%; border-collapse: collapse;">
+            <thead>
+                <tr style="background-color: #333; color: white;">
+                    <th style="padding: 8px;">Código</th>
+                    <th style="padding: 8px;">Artículo</th>
+                    <th style="padding: 8px;">Rubro</th>
+                    <th style="padding: 8px;">Depósito</th>
+                    <th style="padding: 8px; text-align: right;">Cantidad</th>
+                    <th style="padding: 8px; text-align: right;">Costo Unit.</th>
+                    <th style="padding: 8px; text-align: right;">Total Valorizado</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for linea in lineas %}
+                <tr style="border-bottom: 1px solid #eee; {% cycle 'background-color: #fff;' 'background-color: #f9f9f9;' %}">
+                    <td style="padding: 8px;">{{ linea.codigo }}</td>
+                    <td style="padding: 8px;"><strong>{{ linea.descripcion }}</strong></td>
+                    <td style="padding: 8px; font-size: 0.9em; color: #666;">{{ linea.rubro }}</td>
+                    <td style="padding: 8px;">{{ linea.deposito }}</td>
+
+                    <td style="padding: 8px; text-align: right; font-weight: bold;">
+                        {{ linea.cantidad|floatformat:2 }}
+                    </td>
+                    <td style="padding: 8px; text-align: right; color: #666;">
+                        $ {{ linea.costo|floatformat:2 }}
+                    </td>
+                    <td style="padding: 8px; text-align: right; color: green;">
+                        $ {{ linea.total|floatformat:2 }}
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="7" style="padding: 20px; text-align: center;">
+                        No hay stock físico registrado en este momento.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr style="background-color: #e9ecef; font-weight: bold; font-size: 1.1em; border-top: 2px solid #999;">
+                    <td colspan="4" style="padding: 10px; text-align: right;">TOTAL GENERAL:</td>
+                    <td style="padding: 10px; text-align: right;">{{ total_stock|floatformat:2 }} u.</td>
+                    <td style="padding: 10px;"></td>
+                    <td style="padding: 10px; text-align: right; color: #28a745;">
+                        {{ moneda }} $ {{ total_valor|floatformat:2 }}
+                    </td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</div>
+{% endblock %}

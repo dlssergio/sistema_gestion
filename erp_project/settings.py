@@ -41,6 +41,7 @@ SHARED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.humanize',
 
     # Apps de terceros que son compartidas
     'rest_framework',
@@ -59,6 +60,7 @@ TENANT_APPS = [
     'ventas',
     'finanzas',
     'guardian',
+    'users',
 ]
 
 # <<< CAMBIO >>> INSTALLED_APPS ahora se construye a partir de las listas anteriores

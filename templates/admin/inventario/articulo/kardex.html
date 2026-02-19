@@ -1,0 +1,78 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+<a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+&rsaquo; <a href="{% url 'admin:app_list' app_label='inventario' %}">Inventario</a>
+&rsaquo; <a href="{% url 'admin:inventario_articulo_changelist' %}">Artículos</a>
+&rsaquo; {{ articulo.cod_articulo }}
+&rsaquo; Kardex
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+    <h1>Ficha de Stock: {{ articulo.descripcion }} <small>({{ articulo.cod_articulo }})</small></h1>
+
+    <div class="module">
+        <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+            <thead>
+                <tr style="background-color: #f8f9fa; border-bottom: 2px solid #dee2e6; text-align: left;">
+                    <th style="padding: 10px;">Fecha</th>
+                    <th style="padding: 10px;">Depósito</th>
+                    <th style="padding: 10px;">Movimiento</th>
+                    <th style="padding: 10px;">Referencia</th>
+                    <th style="padding: 10px; text-align: right; color: green;">Entrada</th>
+                    <th style="padding: 10px; text-align: right; color: red;">Salida</th>
+                    <th style="padding: 10px; text-align: right; font-weight: bold;">Saldo</th>
+                    <th style="padding: 10px;">Usuario</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for fila in filas %}
+                <tr style="border-bottom: 1px solid #eee;">
+                    <td style="padding: 8px;">{{ fila.fecha|date:"d/m/Y H:i" }}</td>
+                    <td style="padding: 8px;">{{ fila.deposito }}</td>
+                    <td style="padding: 8px;">
+                        <span style="font-size: 0.9em; background: #eee; padding: 2px 5px; border-radius: 3px;">
+                            {{ fila.origen }}
+                        </span>
+                    </td>
+                    <td style="padding: 8px;">{{ fila.referencia }}</td>
+
+                    <td style="padding: 8px; text-align: right;">
+                        {% if fila.entrada > 0 %}+{{ fila.entrada|floatformat:2 }}{% endif %}
+                    </td>
+                    <td style="padding: 8px; text-align: right;">
+                        {% if fila.salida > 0 %}-{{ fila.salida|floatformat:2 }}{% endif %}
+                    </td>
+
+                    <td style="padding: 8px; text-align: right; font-weight: bold; background-color: #fdfdfd;">
+                        {{ fila.saldo|floatformat:2 }}
+                    </td>
+                    <td style="padding: 8px; color: #666;">{{ fila.usuario|default:"-" }}</td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="8" style="padding: 20px; text-align: center; color: #666;">
+                        No hay movimientos registrados para este artículo.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr style="background-color: #e9ecef; font-weight: bold;">
+                    <td colspan="6" style="padding: 10px; text-align: right;">SALDO ACTUAL:</td>
+                    <td style="padding: 10px; text-align: right; font-size: 1.2em;">{{ saldo_final|floatformat:2 }}</td>
+                    <td></td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+
+    <div style="margin-top: 20px;">
+        <a href="#" onclick="window.history.back();" class="button" style="padding: 10px 20px;">&larr; Volver</a>
+    </div>
+</div>
+{% endblock %}

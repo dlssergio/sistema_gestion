@@ -1,79 +1,128 @@
-# ventas/signals.py (VERSIÓN LIMPIA Y FUNCIONAL)
+# ventas/signals.py (CORREGIDO PARA RESPETAR GATEKEEPER Y RSRV)
+
 from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
 from django.db import transaction
 from .models import ComprobanteVenta, Recibo, PriceList, ProductPrice
 from inventario.models import Articulo
 from finanzas.models import Cheque
-from inventario.services import StockService
+from inventario.services import StockManager  # Usamos el nuevo Manager
 
 
-# --- LÓGICA DE STOCK ---
-@receiver(post_save, sender=ComprobanteVenta, dispatch_uid='stock_unico_venta')
-def aplicar_stock_venta(sender, instance, **kwargs):
-    # 1. Validar estado CONFIRMADO
-    if instance.estado != ComprobanteVenta.Estado.CONFIRMADO:
-        return
-
-    # 2. BLINDAJE ANTI-VACÍO (CRÍTICO)
-    # Si Django está guardando el padre pero aún no los hijos, salimos sin marcar nada.
-    # Esto permite que la señal se ejecute de nuevo cuando los ítems estén listos.
-    if not instance.items.exists():
-        return
-
-    # 3. Validar si ya se aplicó (consultando DB real)
-    if instance.pk:
-        instance.refresh_from_db(fields=['stock_aplicado'])
-
-    if instance.stock_aplicado:
-        return
-
-    # 4. Lógica de Stock
-    if instance.tipo_comprobante and instance.tipo_comprobante.mueve_stock:
-        signo = instance.tipo_comprobante.signo_stock
-
-        for item in instance.items.all():
-            cantidad_real = item.cantidad * signo
-            accion = 'SUMAR' if cantidad_real > 0 else 'RESTAR'
-            cantidad_absoluta = abs(cantidad_real)
-
-            if cantidad_absoluta > 0:
-                StockService.ajustar_stock(
-                    articulo=item.articulo,
-                    deposito=instance.deposito,
-                    cantidad=cantidad_absoluta,
-                    operacion=accion
-                )
-
-        # 5. Marcar como aplicado
-        ComprobanteVenta.objects.filter(pk=instance.pk).update(stock_aplicado=True)
-        instance.stock_aplicado = True
-
-
+# --- 1. AUTOMATIZACIÓN CAE ---
 @receiver(post_save, sender=ComprobanteVenta)
 def intentar_cae_automatico(sender, instance, created, **kwargs):
-    # Solo si está confirmado y NO tiene CAE
-    if instance.estado == 'CN' and not instance.cae:
-        from parametros.models import ConfiguracionEmpresa
-        config = ConfiguracionEmpresa.objects.first()
-
-        if config and config.modo_facturacion == 'AUTO':
-            # Importar aquí para evitar importación circular
+    if instance.estado == ComprobanteVenta.Estado.CONFIRMADO and not instance.cae and instance.serie:
+        if instance.serie.solicitar_cae_automaticamente:
             from parametros.afip import AfipManager
             try:
+                print(f"⚡ Iniciando CAE Automático para {instance.numero_completo}...")
                 afip = AfipManager()
                 afip.emitir_comprobante(instance)
             except Exception as e:
-                # En signals es delicado fallar, mejor loguear el error
-                print(f"Error CAE Automático: {e}")
+                print(f"❌ Error CAE Automático: {e}")
+                instance.afip_error = str(e)
+                instance.save(update_fields=['afip_error'])
 
 
-# --- LÓGICA DE FINANZAS (RECIBOS) ---
+# --- 2. LÓGICA DE STOCK HÍBRIDA (ENTERPRISE) ---
+@receiver(post_save, sender=ComprobanteVenta, dispatch_uid='stock_movement_signal')
+def aplicar_movimiento_stock(sender, instance, **kwargs):
+    """
+    Maneja:
+    1. El movimiento propio del comprobante (Ej: Factura baja Real).
+    2. El efecto de los orígenes (Ej: Si viene de Nota de Pedido, baja Comprometido).
+    """
+    # A. Validaciones
+    if instance.estado != ComprobanteVenta.Estado.CONFIRMADO: return
+    if instance.pk: instance.refresh_from_db(fields=['stock_aplicado'])
+    if instance.stock_aplicado: return
+    if not instance.items.exists(): return
 
+    tipo = instance.tipo_comprobante
+
+    # Interruptor general
+    if not tipo or not tipo.mueve_stock: return
+
+    # B. Signo Base
+    signo = tipo.signo_stock
+    if tipo.codigo_afip in ['003', '008', '013']:  # NC (Notas de Crédito)
+        if instance.concepto_nota_credito == ComprobanteVenta.ConceptoNC.FINANCIERO:
+            return
+        if instance.concepto_nota_credito in [ComprobanteVenta.ConceptoNC.DEVOLUCION,
+                                              ComprobanteVenta.ConceptoNC.ANULACION]:
+            signo = 1
+
+    # C. Ejecución de Movimientos
+    ref = f"Venta: {tipo.nombre} {instance.numero_completo}"
+
+    for item in instance.items.all():
+        cantidad_abs = abs(item.cantidad)
+        cantidad_final = cantidad_abs * signo  # Normalmente negativo para ventas
+
+        # 1. Impacto REAL (Físico)
+        # Esto ocurre si es Factura o Remito
+        if tipo.afecta_stock_fisico:
+            StockManager.registrar_movimiento(
+                articulo=item.articulo,
+                deposito=instance.deposito,
+                codigo_tipo='REAL',
+                cantidad=cantidad_final,
+                origen_sistema='VENTAS',
+                origen_referencia=ref,
+                usuario=None,
+                # CAMBIO CRÍTICO: Pasamos None para que StockManager verifique los flags
+                # de Artículo y Depósito. Si es False (default), rechazará stock negativo.
+                permitir_stock_negativo=None
+            )
+
+        # 2. Impacto RSRV (Comprometido) - DIRECTO
+        # Esto ocurre SOLO si el comprobante actual es una Nota de Pedido / Reserva.
+        # Una Factura NO debería entrar aquí (si está bien configurada).
+        if tipo.afecta_stock_comprometido:
+            StockManager.registrar_movimiento(
+                articulo=item.articulo,
+                deposito=instance.deposito,
+                codigo_tipo='RSRV',
+                cantidad=cantidad_final,  # En NP, signo suele ser positivo (suma reserva)
+                origen_sistema='VENTAS',
+                origen_referencia=ref,
+                usuario=None,
+                permitir_stock_negativo=True  # Las reservas suelen permitir ir a negativo virtualmente si se configura
+            )
+
+    # D. Lógica de Descompromiso (Impacto RSRV - INDIRECTO)
+    # Si este comprobante mueve Físico (es Factura) Y NO mueve Comprometido (no es Pedido),
+    # entonces revisamos si viene de un Pedido para "liberar" esa reserva.
+    if tipo.afecta_stock_fisico and not tipo.afecta_stock_comprometido:
+        for origen in instance.comprobantes_asociados.all():
+            tipo_origen = origen.tipo_comprobante
+
+            # Si el origen era una reserva (Suma RSRV)
+            if tipo_origen.mueve_stock and tipo_origen.afecta_stock_comprometido:
+                print(f"🔄 Liberando reserva de {origen}")
+                for item_factura in instance.items.all():
+                    # Liberamos (Restamos) del RSRV la cantidad que estamos facturando
+                    StockManager.registrar_movimiento(
+                        articulo=item_factura.articulo,
+                        deposito=instance.deposito,
+                        codigo_tipo='RSRV',
+                        cantidad=-abs(item_factura.cantidad),  # Siempre negativo para liberar
+                        origen_sistema='VENTAS',
+                        origen_referencia=f"Descompromiso {instance.numero_completo} (Ref: {origen.numero_completo})",
+                        usuario=None,
+                        permitir_stock_negativo=True
+                    )
+
+    # E. Bloqueo
+    ComprobanteVenta.objects.filter(pk=instance.pk).update(stock_aplicado=True)
+    instance.stock_aplicado = True
+
+
+# --- 3. FINANZAS ---
 @receiver(post_save, sender=Recibo)
 def trigger_finanzas_recibo(sender, instance, **kwargs):
-    if instance.estado == Recibo.Estado.ANULADO:
-        instance.revertir_finanzas()
+    if instance.estado == Recibo.Estado.ANULADO: instance.revertir_finanzas()
 
 
 @receiver(pre_delete, sender=Recibo)
@@ -93,8 +142,7 @@ def reversar_al_eliminar_recibo(sender, instance, **kwargs):
                     Cheque.objects.filter(numero=valor.referencia).update(estado=Cheque.Estado.ANULADO)
 
 
-# --- LÓGICA DE PRECIOS (SINCRONIZACIÓN) ---
-
+# --- 4. PRECIOS ---
 @receiver(post_save, sender=Articulo)
 def manage_default_product_price(sender, instance, **kwargs):
     if getattr(instance, '_from_pricelist_sync', False): return
