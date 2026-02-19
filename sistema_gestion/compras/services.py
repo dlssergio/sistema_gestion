@@ -1,14 +1,19 @@
-# sistema_gestion/compras/services.py (VERSIÓN ENTERPRISE - HÍBRIDA)
+# sistema_gestion/compras/services.py (VERSIÓN CORREGIDA - SIN IMPORTACIÓN CIRCULAR)
 
 from decimal import Decimal
 from djmoney.money import Money
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db.models import Q
+from django.db import transaction
 from django.utils import timezone
 
-# Modelos
-from .models import ListaPreciosProveedor, ItemListaPreciosProveedor, Proveedor
+# Modelos Externos (Estos no causan ciclo, se quedan arriba)
 from inventario.models import ConversionUnidadMedida, Articulo
+from inventario.services import StockManager
+
+
+# NOTA: Los modelos locales (.models) se importan DENTRO de los métodos
+# para evitar Circular Import con compras/models.py
 
 
 class PriceListService:
@@ -25,6 +30,9 @@ class PriceListService:
         1. Lista Principal Vigente
         2. Otras Listas Activas Vigentes (la más reciente)
         """
+        # Importación diferida para romper el ciclo
+        from .models import ListaPreciosProveedor, ItemListaPreciosProveedor
+
         if fecha is None:
             fecha = timezone.now().date()
 
@@ -76,7 +84,8 @@ class CostCalculatorService:
         return final_amount.quantize(Decimal('0.0001'))
 
     @classmethod
-    def calculate_effective_cost(cls, item_precio: ItemListaPreciosProveedor) -> Money:
+    def calculate_effective_cost(cls, item_precio: 'ItemListaPreciosProveedor') -> Money:
+        # Nota: item_precio se pasa como argumento, no necesitamos importar la clase para usar sus atributos
         costo_base = item_precio.precio_lista.amount
         currency = item_precio.precio_lista.currency
 
@@ -108,9 +117,11 @@ class CostCalculatorService:
     def get_latest_price(cls, proveedor_pk: int, articulo_pk: str, cantidad: Decimal = Decimal(1)):
         """
         MÉTODO ACTUALIZADO (Fachada):
-        Usa PriceListService para buscar el ítem correcto, pero mantiene la firma
-        para que las vistas actuales sigan funcionando sin cambios.
+        Usa PriceListService para buscar el ítem correcto.
         """
+        # Importación diferida
+        from .models import Proveedor
+
         try:
             proveedor = Proveedor.objects.get(pk=proveedor_pk)
             articulo = Articulo.objects.get(pk=articulo_pk)
@@ -123,3 +134,88 @@ class CostCalculatorService:
         except Exception as e:
             print(f"Error en get_latest_price: {e}")
             return None
+
+
+# =========================================================
+# NUEVA LÓGICA DE STOCK PARA COMPRAS (ENTERPRISE)
+# =========================================================
+
+class ComprasStockService:
+    """
+    Gestor de Movimientos de Stock para el ciclo de Compras.
+    Implementa el flujo: Orden de Compra (RCPT) -> Recepción (REAL).
+    """
+
+    @staticmethod
+    @transaction.atomic
+    def confirmar_orden_compra(comprobante: 'ComprobanteCompra'):
+        """
+        Al confirmar una OC, aumentamos el stock 'A Recibir' (RCPT).
+        Esto permite a Planeamiento ver qué está por llegar.
+        """
+        if comprobante.stock_aplicado: return
+
+        # Validamos que sea una OC o similar (Si NO mueve stock físico directo, es una OC/Preventa)
+        if not comprobante.tipo_comprobante.afecta_stock_fisico:
+            ref = f"OC #{comprobante.numero}"
+            for item in comprobante.items.all():
+                StockManager.registrar_movimiento(
+                    articulo=item.articulo,
+                    deposito=comprobante.deposito,
+                    codigo_tipo='RCPT',  # Aumenta "A Recibir"
+                    cantidad=item.cantidad,  # Positivo
+                    origen_sistema='COMPRAS',
+                    origen_referencia=ref,
+                    usuario=None
+                )
+            # NOTA: Podrías necesitar un flag específico 'stock_previsto_aplicado' en el modelo
+            # si quieres controlar idempotencia solo para la OC, separado del stock real.
+            pass
+
+    @staticmethod
+    @transaction.atomic
+    def procesar_recepcion_mercaderia(comprobante: 'ComprobanteCompra'):
+        """
+        Al recibir la mercadería (Remito/Factura de Compra):
+        1. Aumenta Stock REAL (Físico).
+        2. Disminuye Stock RCPT (Si venía de una OC previa).
+        """
+        # Importación diferida para actualizar el estado al final
+        from .models import ComprobanteCompra
+
+        if comprobante.stock_aplicado: return
+
+        # Solo procesamos si el tipo de comprobante indica movimiento físico (Remito, Factura)
+        if not comprobante.tipo_comprobante.afecta_stock_fisico: return
+
+        ref = f"Recepción {comprobante.tipo_comprobante.nombre} #{comprobante.numero}"
+
+        for item in comprobante.items.all():
+            # 1. Ingreso Físico (REAL)
+            StockManager.registrar_movimiento(
+                articulo=item.articulo,
+                deposito=comprobante.deposito,
+                codigo_tipo='REAL',
+                cantidad=item.cantidad,  # Positivo (Entrada)
+                origen_sistema='COMPRAS',
+                origen_referencia=ref,
+                usuario=None
+            )
+
+            # 2. Cancelación de Expectativa (RCPT) - Si existe enlace con OC
+            if comprobante.comprobante_origen:
+                # Si viene de una OC, asumimos que esa OC generó RCPT. Lo restamos.
+                StockManager.registrar_movimiento(
+                    articulo=item.articulo,
+                    deposito=comprobante.deposito,
+                    codigo_tipo='RCPT',
+                    cantidad=-item.cantidad,  # Negativo (Descargamos la expectativa)
+                    origen_sistema='COMPRAS',
+                    origen_referencia=f"Cierre OC por Recep. #{comprobante.numero}",
+                    usuario=None,
+                    permitir_stock_negativo=True  # Permitimos negativo por diferencias menores
+                )
+
+        # Bloqueamos para no duplicar
+        comprobante.stock_aplicado = True
+        ComprobanteCompra.objects.filter(pk=comprobante.pk).update(stock_aplicado=True)

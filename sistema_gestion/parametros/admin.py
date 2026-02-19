@@ -88,7 +88,7 @@ class UnidadMedidaAdmin(admin.ModelAdmin):
 class SerieDocumentoAdmin(admin.ModelAdmin):
     # 1. Agregamos 'diseno_impresion' a la lista para verlo en la tabla general
     list_display = (
-    'nombre', 'tipo_comprobante', 'punto_venta', 'ultimo_numero', 'es_manual', 'activo', 'diseno_impresion')
+    'nombre', 'tipo_comprobante', 'punto_venta', 'ultimo_numero', 'es_manual', 'solicitar_cae_automaticamente', 'activo', 'diseno_impresion')
 
     list_filter = ('tipo_comprobante', 'es_manual', 'activo')
     search_fields = ('nombre', 'punto_venta')
@@ -100,14 +100,14 @@ class SerieDocumentoAdmin(admin.ModelAdmin):
         ('Configuración Principal', {
             'fields': ('nombre', 'tipo_comprobante', 'punto_venta', 'activo')
         }),
-        ('Numeración', {
-            'fields': ('ultimo_numero', 'es_manual'),
-            'description': 'El sistema sumará 1 al último número automáticamente al emitir, a menos que sea manual.'
+        ('Numeración y Automatización', {
+            'fields': (
+                'ultimo_numero',
+                'es_manual',
+                'solicitar_cae_automaticamente',  # <--- Agregado aquí para poder editarlo
+                'deposito_defecto'
+            )
         }),
-        ('Automatización', {
-            'fields': ('deposito_defecto',)
-        }),
-        # --- NUEVA SECCIÓN AGREGADA ---
         ('Diseño de Reporte', {
             'fields': ('diseno_impresion',),
             'description': 'Selecciona la plantilla PDF específica para este talonario (Ej: Factura A, Presupuesto, etc).'
