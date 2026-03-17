@@ -1,18 +1,27 @@
-# en entidades/views.py
+# entidades/views.py
 
 from rest_framework import viewsets
+from rest_framework.filters import SearchFilter, OrderingFilter
+
 from ventas.models import Cliente
 from compras.models import Proveedor
 from .serializers import ClienteSerializer, ProveedorSerializer
-from guardian.shortcuts import get_objects_for_user  # <<< 1. Importamos la función de guardian
+
+from guardian.shortcuts import get_objects_for_user
+
 
 class ClienteViewSet(viewsets.ReadOnlyModelViewSet):
     """
     API endpoint que permite ver los Clientes.
     """
-    queryset = Cliente.objects.all()
+    queryset = Cliente.objects.all().order_by('entidad__razon_social')
     serializer_class = ClienteSerializer
-    search_fields = ['entidad__razon_social', 'entidad__cuit']
+
+    # ✅ Esto es lo que faltaba: DRF necesita filter_backends para usar ?search=
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = ['entidad__razon_social', 'entidad__cuit', 'codigo_cliente']
+    ordering_fields = ['entidad__razon_social', 'entidad__cuit']
+    ordering = ['entidad__razon_social']
 
 
 class ProveedorViewSet(viewsets.ReadOnlyModelViewSet):
@@ -21,7 +30,12 @@ class ProveedorViewSet(viewsets.ReadOnlyModelViewSet):
     ¡AHORA USA EL MOTOR DE PERMISOS DE DJANGO-GUARDIAN!
     """
     serializer_class = ProveedorSerializer
+
+    # ✅ idem: habilitar ?search=
+    filter_backends = [SearchFilter, OrderingFilter]
     search_fields = ['entidad__razon_social', 'entidad__cuit', 'nombre_fantasia', 'codigo_proveedor']
+    ordering_fields = ['entidad__razon_social', 'entidad__cuit', 'nombre_fantasia', 'codigo_proveedor']
+    ordering = ['entidad__razon_social']
 
     def get_queryset(self):
         """

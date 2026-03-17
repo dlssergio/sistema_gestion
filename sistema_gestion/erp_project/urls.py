@@ -1,16 +1,17 @@
-# en erp_project/urls.py (Versión Final Limpia)
+# erp_project/urls.py
 
 from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 
-
 urlpatterns = [
     path('admin/', admin.site.urls),
-    # Una sola línea para gobernar toda la API.
+
+    # API principal
     path('api/', include('api.urls')),
-    # API de Usuarios (Login/Logout para Vue)
+
+    # API de usuarios / autenticación propia
     path('api/auth/', include('users.urls')),
 ]
 

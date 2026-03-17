@@ -6,7 +6,10 @@ from django.core.exceptions import ValidationError
 from decimal import Decimal
 from djmoney.money import Money
 from django.conf import settings
-from finanzas.models import TipoValor, CuentaFondo, Cheque, MovimientoFondo, Banco, Tarjeta, PlanTarjeta, PlanCuota
+
+from finanzas.models import (
+    TipoValor, CuentaFondo, Cheque, MovimientoFondo, Banco, Tarjeta, PlanTarjeta, PlanCuota
+)
 from inventario.services import StockManager
 
 
@@ -22,7 +25,35 @@ def get_default_moneda_pk():
 # --- CLIENTE, COMPROBANTES, LISTAS ---
 
 class Cliente(models.Model):
-    entidad = models.OneToOneField('entidades.Entidad', on_delete=models.CASCADE, primary_key=True)
+
+    class Categoria(models.TextChoices):
+        MINORISTA   = 'MIN', 'Minorista'
+        MAYORISTA   = 'MAY', 'Mayorista'
+        VIP         = 'VIP', 'VIP / Premium'
+        GOBIERNO    = 'GOB', 'Gobierno / Institución'
+        EXPORTACION = 'EXP', 'Exportación'
+
+    entidad = models.OneToOneField(
+        'entidades.Entidad', on_delete=models.CASCADE, primary_key=True
+    )
+
+    # ── Identificación ─────────────────────────────────────────────
+    codigo_cliente = models.CharField(
+        max_length=20, unique=True, blank=True, null=True,
+        verbose_name="Código de Cliente",
+        help_text="Se autogenera si se deja vacío. Ej: C00001"
+    )
+    nombre_fantasia = models.CharField(
+        max_length=255, blank=True, null=True,
+        verbose_name="Nombre de Fantasía / Comercial"
+    )
+    categoria = models.CharField(
+        max_length=3, choices=Categoria.choices,
+        default=Categoria.MINORISTA,
+        verbose_name="Categoría"
+    )
+
+    # ── Comercial ──────────────────────────────────────────────────
     price_list = models.ForeignKey(
         'PriceList',
         on_delete=models.SET_NULL,
@@ -30,12 +61,79 @@ class Cliente(models.Model):
         blank=True,
         verbose_name="Lista de Precios Asignada"
     )
-    permite_cta_cte = models.BooleanField(default=False, verbose_name="Habilitar Cuenta Corriente",
-                                          help_text="Si está desactivado, este cliente solo puede operar de CONTADO.")
-    limite_credito = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="Límite de Crédito")
+    descuento_base = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0,
+        verbose_name="Descuento Base (%)",
+        help_text="Descuento adicional que aplica siempre sobre el precio de lista."
+    )
+    vendedor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='clientes_asignados',
+        verbose_name="Vendedor Asignado"
+    )
+    zona = models.CharField(
+        max_length=100, blank=True, null=True,
+        verbose_name="Zona / Región",
+        help_text="Ej: Zona Norte, Litoral, Gran Buenos Aires"
+    )
+
+    # ── Crédito ────────────────────────────────────────────────────
+    permite_cta_cte = models.BooleanField(
+        default=False,
+        verbose_name="Habilitar Cuenta Corriente",
+        help_text="Si está desactivado, este cliente solo puede operar de CONTADO."
+    )
+    limite_credito = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        verbose_name="Límite de Crédito"
+    )
+    dias_vencimiento = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Días para Vencimiento de Factura",
+        help_text="Ej: 30 = la factura vence a 30 días de emitida."
+    )
+
+    # ── Contacto comercial ─────────────────────────────────────────
+    contacto_nombre = models.CharField(
+        max_length=150, blank=True, null=True,
+        verbose_name="Nombre del Contacto Comercial"
+    )
+    contacto_email = models.EmailField(
+        blank=True, null=True,
+        verbose_name="Email Comercial",
+        help_text="Email para envíos de presupuestos, remitos. Puede diferir del fiscal."
+    )
+    contacto_telefono = models.CharField(
+        max_length=50, blank=True, null=True,
+        verbose_name="Teléfono Comercial"
+    )
+
+    # ── Auditoría ──────────────────────────────────────────────────
+    fecha_alta = models.DateField(
+        null=True, blank=True,
+        verbose_name="Fecha de Alta"
+    )
+    esta_activo = models.BooleanField(default=True, verbose_name="¿Está Activo?")
+    observaciones = models.TextField(blank=True, null=True, verbose_name="Observaciones Internas")
+
+    def save(self, *args, **kwargs):
+        if not self.codigo_cliente:
+            from parametros.models import Contador
+            with transaction.atomic():
+                contador, _ = Contador.objects.get_or_create(
+                    nombre='codigo_cliente',
+                    defaults={'prefijo': 'C', 'ultimo_valor': 0}
+                )
+                contador.ultimo_valor += 1
+                self.codigo_cliente = f"{contador.prefijo}{str(contador.ultimo_valor).zfill(5)}"
+                contador.save()
+        super().save(*args, **kwargs)
 
     def __str__(self):
-        return self.entidad.razon_social
+        codigo = self.codigo_cliente or '?'
+        return f"[{codigo}] {self.entidad.razon_social}"
 
     class Meta:
         verbose_name = "Cliente"
@@ -57,21 +155,35 @@ class ComprobanteVenta(models.Model):
         FINANCIERO = 'FIN', 'Ajuste Financiero / Descuento (No Mueve Stock)'
         ANULACION = 'ANU', 'Anulación de Operación (Mueve Stock)'
 
-    serie = models.ForeignKey('parametros.SerieDocumento', on_delete=models.PROTECT,
-                              null=True, blank=True, verbose_name="Serie / Talonario")
-    tipo_comprobante = models.ForeignKey('parametros.TipoComprobante', on_delete=models.PROTECT,
-                                         null=True, blank=True, verbose_name="Tipo de Comprobante")
+    serie = models.ForeignKey(
+        'parametros.SerieDocumento', on_delete=models.PROTECT,
+        null=True, blank=True, verbose_name="Serie / Talonario"
+    )
+    tipo_comprobante = models.ForeignKey(
+        'parametros.TipoComprobante', on_delete=models.PROTECT,
+        null=True, blank=True, verbose_name="Tipo de Comprobante"
+    )
     numero = models.PositiveIntegerField(blank=True, null=True, verbose_name="Número")
-    letra = models.CharField(max_length=1, editable=False)
+
+    # ✅ FIX: letra debe poder existir antes de asignar serie/tipo (borradores, flujos parciales)
+    letra = models.CharField(max_length=1, editable=False, blank=True, default='')
+
     punto_venta = models.PositiveIntegerField(default=1, verbose_name="Punto de Venta")
     cliente = models.ForeignKey('Cliente', on_delete=models.PROTECT, verbose_name="Cliente")
-    fecha = models.DateField(default=timezone.now, verbose_name="Fecha del Comprobante")
+
+    # DateTimeField
+    fecha = models.DateTimeField(default=timezone.now, verbose_name="Fecha del Comprobante")
+
     estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.BORRADOR)
     condicion_venta = models.CharField(max_length=2, choices=CondicionVenta.choices, default=CondicionVenta.CONTADO)
+
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0, editable=False)
     impuestos = models.JSONField(default=dict, editable=False)
     total = models.DecimalField(max_digits=12, decimal_places=2, default=0, editable=False)
+
+    # ✅ saldo_pendiente debe respetar pagos/imputaciones
     saldo_pendiente = models.DecimalField(max_digits=12, decimal_places=2, default=0, editable=False)
+
     deposito = models.ForeignKey('inventario.Deposito', on_delete=models.PROTECT, null=True, blank=True)
     stock_aplicado = models.BooleanField(default=False, editable=False)
     observaciones = models.TextField(blank=True, null=True, verbose_name="Observaciones / Notas")
@@ -92,6 +204,11 @@ class ComprobanteVenta(models.Model):
         verbose_name="Motivo de Nota de Crédito",
         help_text="Define si se debe reintegrar el stock o solo ajustar saldo."
     )
+
+    cliente_nombre_override = models.CharField(max_length=255, blank=True, null=True,
+                                               verbose_name='Nombre / Razón Social (Override)')
+    cliente_cuit_override = models.CharField(max_length=13, blank=True, null=True, verbose_name='CUIT / DNI (Override)')
+    cliente_email_override = models.EmailField(max_length=254, blank=True, null=True, verbose_name='Email (Override)')
 
     # --- CAMPOS AFIP ---
     cae = models.CharField(max_length=50, blank=True, null=True, verbose_name="CAE")
@@ -122,22 +239,56 @@ class ComprobanteVenta(models.Model):
         return self.tipo_comprobante.mueve_stock
 
     def es_electronica(self):
-        return self.serie and self.serie.tipo_comprobante.codigo_afip is not None
+        return bool(self.serie and self.serie.tipo_comprobante and self.serie.tipo_comprobante.codigo_afip is not None)
 
     @property
     def numero_completo(self):
-        return f"{self.letra} {self.punto_venta:05d}-{self.numero or 0:08d}"
+        letra = (self.letra or '').strip()
+        return f"{letra} {self.punto_venta:05d}-{(self.numero or 0):08d}".strip()
 
     @property
     def estado_pago(self):
-        if self.saldo_pendiente == 0: return "PAGADO"
-        if self.saldo_pendiente == self.total: return "IMPAGO"
+        if self.saldo_pendiente == 0:
+            return "PAGADO"
+        if self.saldo_pendiente == self.total:
+            return "IMPAGO"
         return "PARCIAL"
 
     def clean(self):
         if self.condicion_venta == self.CondicionVenta.CTA_CTE and not self.cliente.permite_cta_cte:
             raise ValidationError(
-                f"El cliente {self.cliente} NO está habilitado para operar en Cuenta Corriente. Debe ser CONTADO.")
+                f"El cliente {self.cliente} NO está habilitado para operar en Cuenta Corriente. Debe ser CONTADO."
+            )
+
+    # ✅ Helper: recalcular totales y saldo sin romper pagos
+    def recalcular_totales_y_saldo(self, *, nuevo_subtotal: Decimal, nuevos_impuestos: dict, nuevo_total: Decimal):
+        """
+        Aplica subtotal/impuestos/total y recalcula saldo_pendiente respetando pagos previos.
+        Regla:
+        - BR: saldo = total
+        - CN: mantiene pagado (total_anterior - saldo_anterior)
+        - AN: saldo = 0
+        """
+        total_anterior = Decimal(str(self.total or 0))
+        saldo_anterior = Decimal(str(self.saldo_pendiente or 0))
+        pagado_anterior = total_anterior - saldo_anterior
+        if pagado_anterior < 0:
+            pagado_anterior = Decimal("0")
+
+        self.subtotal = Decimal(str(nuevo_subtotal or 0))
+        self.impuestos = {k: str(v) for k, v in (nuevos_impuestos or {}).items()}
+        self.total = Decimal(str(nuevo_total or 0))
+
+        if self.estado == self.Estado.ANULADO:
+            self.saldo_pendiente = Decimal("0")
+        elif self.estado == self.Estado.BORRADOR:
+            self.saldo_pendiente = self.total
+        else:
+            # CONFIRMADO: respeta lo pagado
+            saldo_nuevo = self.total - pagado_anterior
+            if saldo_nuevo < 0:
+                saldo_nuevo = Decimal("0")
+            self.saldo_pendiente = saldo_nuevo
 
     def save(self, *args, **kwargs):
         if self.serie:
@@ -146,6 +297,7 @@ class ComprobanteVenta(models.Model):
             self.punto_venta = self.serie.punto_venta
             if not self.deposito and self.serie.deposito_defecto:
                 self.deposito = self.serie.deposito_defecto
+
             if not self.serie.es_manual and not self.numero:
                 from parametros.models import SerieDocumento
                 with transaction.atomic():
@@ -153,7 +305,8 @@ class ComprobanteVenta(models.Model):
                     self.numero = serie_lock.ultimo_numero + 1
                     serie_lock.ultimo_numero = self.numero
                     serie_lock.save()
-        if self.tipo_comprobante and not self.letra:
+
+        if self.tipo_comprobante and not (self.letra or '').strip():
             self.letra = self.tipo_comprobante.letra
 
         # Asignar depósito por defecto si no tiene
@@ -166,7 +319,7 @@ class ComprobanteVenta(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        fecha_str = self.fecha.strftime('%d/%m/%Y') if self.fecha else 'S/F'
+        fecha_str = self.fecha.strftime('%d/%m/%Y %H:%M:%S') if self.fecha else 'S/F'
         tipo = self.tipo_comprobante.nombre if self.tipo_comprobante else 'Venta'
         return f"{tipo} {self.numero_completo} ({fecha_str}) - $ {self.total:,.2f}"
 
@@ -188,27 +341,26 @@ class ComprobanteVentaItem(models.Model):
     def __str__(self):
         return f"{self.cantidad} x {self.articulo.descripcion}"
 
-    # --- VALIDACIÓN PREVENTIVA DE STOCK ---
     def clean(self):
         super().clean()
-        # Si el comprobante padre existe en memoria y se está confirmando
+
         if self.comprobante and hasattr(self.comprobante, 'estado') and hasattr(self.comprobante, 'tipo_comprobante'):
             if self.comprobante.estado == ComprobanteVenta.Estado.CONFIRMADO:
                 tipo = self.comprobante.tipo_comprobante
                 deposito = self.comprobante.deposito
 
-                # Solo validamos si mueve stock físico (REAL)
-                if tipo and tipo.mueve_stock and tipo.afecta_stock_fisico and deposito:
+                # ✅ FIX: no asumir que existe afecta_stock_fisico
+                afecta_fisico = getattr(tipo, "afecta_stock_fisico", True)
 
-                    # Verificamos si se permite negativo
-                    puede_negativo = self.articulo.permite_stock_negativo or deposito.permite_stock_negativo
+                if tipo and getattr(tipo, "mueve_stock", False) and afecta_fisico and deposito:
+                    puede_negativo = bool(
+                        getattr(self.articulo, "permite_stock_negativo", False) or
+                        getattr(deposito, "permite_stock_negativo", False)
+                    )
 
                     if not puede_negativo:
-                        # Consultamos saldo actual (sin bloquear DB)
                         saldo_actual = StockManager.obtener_saldo_actual(self.articulo, deposito, 'REAL')
 
-                        # Si estamos editando un item existente, sumamos su cantidad anterior al saldo
-                        # para no contar doble la reserva.
                         if self.pk:
                             try:
                                 old_item = ComprobanteVentaItem.objects.get(pk=self.pk)
@@ -217,7 +369,6 @@ class ComprobanteVentaItem(models.Model):
                                 pass
 
                         if saldo_actual < self.cantidad:
-                            # Lanzamos el error que Django Admin debería mostrar en el campo
                             raise ValidationError(
                                 f"Stock insuficiente en {deposito}. Disponible: {saldo_actual}. "
                                 f"Solicitado: {self.cantidad}."
@@ -263,7 +414,8 @@ class ProductPrice(models.Model):
                                        verbose_name="Cantidad Máxima")
 
     @property
-    def price(self): return Money(self.price_monto, self.price_moneda.simbolo)
+    def price(self):
+        return Money(self.price_monto, self.price_moneda.simbolo)
 
     class Meta:
         unique_together = ['product', 'price_list', 'min_quantity']
@@ -284,18 +436,19 @@ class Recibo(models.Model):
         CONTADO = 'CON', 'Venta Contado'
         DEVOLUCION = 'DEV', 'Devolución (Salida de Dinero)'
 
-    serie = models.ForeignKey('parametros.SerieDocumento', on_delete=models.PROTECT,
-                              null=True, blank=True)
+    serie = models.ForeignKey('parametros.SerieDocumento', on_delete=models.PROTECT, null=True, blank=True)
     numero = models.PositiveIntegerField(blank=True, null=True)
     cliente = models.ForeignKey(Cliente, on_delete=models.PROTECT)
-    fecha = models.DateField(default=timezone.now)
+    fecha = models.DateTimeField(default=timezone.now)
     estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.BORRADOR)
     monto_total = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False)
     observaciones = models.TextField(blank=True)
     creado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
     finanzas_aplicadas = models.BooleanField(default=False, editable=False)
-    origen = models.CharField(max_length=3, choices=Origen.choices, default=Origen.COBRANZA,
-                              verbose_name="Origen de Fondos")
+    origen = models.CharField(
+        max_length=3, choices=Origen.choices, default=Origen.COBRANZA,
+        verbose_name="Origen de Fondos"
+    )
 
     def save(self, *args, **kwargs):
         if self.serie and not self.numero and not self.serie.es_manual:
@@ -309,12 +462,12 @@ class Recibo(models.Model):
         super().save(*args, **kwargs)
 
     def aplicar_finanzas(self):
-        if self.estado != self.Estado.CONFIRMADO or self.finanzas_aplicadas: return
+        if self.estado != self.Estado.CONFIRMADO or self.finanzas_aplicadas:
+            return
 
-        # Validación Balanceo
-        total_valores = sum(v.monto for v in self.valores.all())
-        total_imputado = sum(i.monto_imputado for i in self.imputaciones.all())
-        # Permitimos pequeña diferencia por redondeo
+        total_valores = sum((v.monto for v in self.valores.all()), Decimal("0"))
+        total_imputado = sum((i.monto_imputado for i in self.imputaciones.all()), Decimal("0"))
+
         if abs(total_imputado - total_valores) > Decimal('0.05'):
             raise ValidationError(f"Desbalance: Valores ${total_valores} vs Imputado ${total_imputado}.")
         if not self.valores.exists():
@@ -323,16 +476,21 @@ class Recibo(models.Model):
         es_salida = (self.origen == self.Origen.DEVOLUCION)
 
         with transaction.atomic():
-            # A. Movimiento de Valores
             for valor in self.valores.all():
                 nuevo_cheque = None
                 if not es_salida and valor.tipo.es_cheque and not valor.cheque_tercero:
                     nuevo_cheque = Cheque.objects.create(
-                        numero=valor.referencia, banco=valor.banco_origen, monto=valor.monto,
-                        moneda=valor.destino.moneda, fecha_emision=self.fecha,
-                        fecha_pago=valor.fecha_cobro or self.fecha, tipo_cheque='FIS',
-                        origen=Cheque.Origen.TERCERO, estado=Cheque.Estado.EN_CARTERA,
-                        cuit_librador=valor.cuit_librador, nombre_librador=f"Cliente: {self.cliente}"
+                        numero=valor.referencia,
+                        banco=valor.banco_origen,
+                        monto=valor.monto,
+                        moneda=valor.destino.moneda,
+                        fecha_emision=self.fecha,
+                        fecha_pago=valor.fecha_cobro or self.fecha,
+                        tipo_cheque='FIS',
+                        origen=Cheque.Origen.TERCERO,
+                        estado=Cheque.Estado.EN_CARTERA,
+                        cuit_librador=valor.cuit_librador,
+                        nombre_librador=f"Cliente: {self.cliente}"
                     )
 
                 MovimientoFondo.objects.create(
@@ -347,24 +505,31 @@ class Recibo(models.Model):
                     cheque=nuevo_cheque or valor.cheque_tercero
                 )
 
+                # ✅ Usar F() para evitar race conditions en actualizaciones concurrentes
+                from django.db.models import F
                 if es_salida:
-                    valor.destino.saldo_monto -= valor.monto
+                    CuentaFondo.objects.filter(pk=valor.destino.pk).update(
+                        saldo_monto=F('saldo_monto') - valor.monto
+                    )
                 else:
-                    valor.destino.saldo_monto += valor.monto
-                valor.destino.save()
+                    CuentaFondo.objects.filter(pk=valor.destino.pk).update(
+                        saldo_monto=F('saldo_monto') + valor.monto
+                    )
 
-            # B. Bajar Deuda (Imputación)
             for imputacion in self.imputaciones.all():
                 comp = imputacion.comprobante
                 comp.saldo_pendiente -= imputacion.monto_imputado
-                if comp.saldo_pendiente < 0: comp.saldo_pendiente = 0
+                if comp.saldo_pendiente < 0:
+                    comp.saldo_pendiente = 0
                 comp.save()
 
             self.finanzas_aplicadas = True
             self.save(update_fields=['finanzas_aplicadas'])
 
     def revertir_finanzas(self):
-        if not self.finanzas_aplicadas: return
+        if not self.finanzas_aplicadas:
+            return
+
         es_salida = (self.origen == self.Origen.DEVOLUCION)
         imputaciones = list(self.imputaciones.all())
         valores = list(self.valores.all())
@@ -375,17 +540,22 @@ class Recibo(models.Model):
                 comp.saldo_pendiente += imputacion.monto_imputado
                 comp.save()
 
+            from django.db.models import F
             for valor in valores:
+                # ✅ Usar F() para evitar race conditions
                 if es_salida:
-                    valor.destino.saldo_monto += valor.monto
+                    CuentaFondo.objects.filter(pk=valor.destino.pk).update(
+                        saldo_monto=F('saldo_monto') + valor.monto
+                    )
                 else:
-                    valor.destino.saldo_monto -= valor.monto
-
-                valor.destino.save()
+                    CuentaFondo.objects.filter(pk=valor.destino.pk).update(
+                        saldo_monto=F('saldo_monto') - valor.monto
+                    )
 
                 if valor.tipo.es_cheque:
                     Cheque.objects.filter(numero=valor.referencia, cuit_librador=valor.cuit_librador).update(
-                        estado=Cheque.Estado.ANULADO)
+                        estado=Cheque.Estado.ANULADO
+                    )
 
             self.finanzas_aplicadas = False
             self.save(update_fields=['finanzas_aplicadas'])
@@ -403,14 +573,14 @@ class ReciboImputacion(models.Model):
     comprobante = models.ForeignKey(ComprobanteVenta, on_delete=models.PROTECT)
     monto_imputado = models.DecimalField(max_digits=14, decimal_places=2)
 
-    def __str__(self): return f"Pago a {self.comprobante}"
+    def __str__(self):
+        return f"Pago a {self.comprobante}"
 
 
 class ReciboValor(models.Model):
     recibo = models.ForeignKey(Recibo, related_name='valores', on_delete=models.CASCADE)
     tipo = models.ForeignKey(TipoValor, on_delete=models.PROTECT)
     monto = models.DecimalField(max_digits=14, decimal_places=2)
-    # Destino de los fondos (Caja o Banco)
     destino = models.ForeignKey(CuentaFondo, on_delete=models.PROTECT, verbose_name="Caja/Cuenta Destino")
     observaciones = models.CharField(max_length=150, blank=True,
                                      help_text="Detalle: N° Cheque, Banco, Lote Tarjeta, etc.")
@@ -420,7 +590,8 @@ class ReciboValor(models.Model):
     fecha_cobro = models.DateField(null=True, blank=True)
     cuit_librador = models.CharField(max_length=11, blank=True)
 
-    def __str__(self): return f"{self.tipo} ${self.monto}"
+    def __str__(self):
+        return f"{self.tipo} ${self.monto}"
 
 
 class ComprobantePendienteCAE(ComprobanteVenta):
@@ -471,25 +642,20 @@ class ComprobanteCobroItem(models.Model):
     comprobante = models.ForeignKey('ComprobanteVenta', on_delete=models.CASCADE, related_name='cobros_asociados')
 
     tipo_valor = models.ForeignKey(TipoValor, on_delete=models.PROTECT)
-    monto = models.DecimalField(max_digits=14, decimal_places=2, help_text="Monto a cobrar (El sistema sumará el recargo si corresponde)")
+    monto = models.DecimalField(
+        max_digits=14, decimal_places=2,
+        help_text="Monto a cobrar (El sistema sumará el recargo si corresponde)"
+    )
 
-    # Destino de fondos
     destino = models.ForeignKey(CuentaFondo, on_delete=models.PROTECT, limit_choices_to={'activa': True})
-
     observaciones = models.CharField(max_length=100, blank=True, help_text="Detalle opcional")
 
-    # --- CAMBIO CLAVE: ELEGIR LA CUOTA ESPECÍFICA ---
-    # Antes: tarjeta_plan (PlanTarjeta) -> Solo elegía la marca
-    # Ahora: opcion_cuota (PlanCuota) -> Elige "Visa Galicia - 3 Cuotas (1.15)"
-    opcion_cuota = models.ForeignKey(PlanCuota, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="Plan y Cuotas")
+    opcion_cuota = models.ForeignKey(
+        PlanCuota, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="Plan y Cuotas"
+    )
 
     tarjeta_lote = models.CharField(max_length=20, blank=True, verbose_name="Lote")
     tarjeta_cupon = models.CharField(max_length=50, blank=True, verbose_name="Cupón")
-
-    # Este campo es opcional, si el plan ya define las cuotas, no hace falta.
-    # Pero si quieres permitir editarlo manual, déjalo. Si no, bórralo.
-    # Por compatibilidad con el admin, lo dejo, pero lo ideal es sacarlo si usas Plan.
-    # Si lo borras aquí, bórralo del admin también.
 
     def __str__(self):
         return f"{self.tipo_valor}: ${self.monto}"
