@@ -1,96 +1,69 @@
-<script setup>
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { useAuthStore } from '../stores/auth' // Importamos nuestro nuevo store
-import { useToast } from 'vue-toastification'
-
-const router = useRouter()
-const authStore = useAuthStore()
-const toast = useToast()
-
-const username = ref('')
-const password = ref('')
-const isLoading = ref(false)
-
-const handleLogin = async () => {
-  isLoading.value = true
-  const success = await authStore.login(username.value, password.value)
-  isLoading.value = false
-
-  if (success) {
-    toast.success('¡Inicio de sesión exitoso!')
-    router.push('/') // Redirigimos al inicio
-  } else {
-    toast.error('Nombre de usuario o contraseña incorrectos.')
-  }
-}
-</script>
-
 <template>
-  <div class="login-container">
-    <div class="login-box">
-      <h2>Iniciar Sesión</h2>
-      <form @submit.prevent="handleLogin">
-        <div class="form-group">
-          <label for="username">Usuario:</label>
-          <input type="text" id="username" v-model="username" required />
-        </div>
-        <div class="form-group">
-          <label for="password">Contraseña:</label>
-          <input type="password" id="password" v-model="password" required />
-        </div>
-        <button type="submit" :disabled="isLoading">
-          {{ isLoading ? 'Ingresando...' : 'Ingresar' }}
-        </button>
-      </form>
+  <div class="login-page">
+    <div class="login-wrapper">
+      <!-- NO envolver con .panel-left adentro: el componente ya es el panel -->
+      <LoginBrandPanel />
+
+      <!-- NO envolver con .panel-right extra: el componente ya controla su layout -->
+      <LoginForm :loading="isLoading" :error="formError" @submit="handleLogin" />
     </div>
   </div>
 </template>
 
+<script setup>
+import { ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+
+import LoginBrandPanel from '@/components/login/LoginBrandPanel.vue'
+import LoginForm from '@/components/login/LoginForm.vue'
+
+const router = useRouter()
+const authStore = useAuthStore()
+
+const isLoading = ref(false)
+const formError = ref('')
+
+const handleLogin = async ({ username, password }) => {
+  formError.value = ''
+  isLoading.value = true
+  try {
+    const ok = await authStore.login(username, password)
+    if (ok) router.push({ name: 'home' })
+    else formError.value = 'Credenciales incorrectas'
+  } catch (e) {
+    formError.value = 'Error de conexión'
+  } finally {
+    isLoading.value = false
+  }
+}
+</script>
+
 <style scoped>
-.login-container {
+.login-page {
+  height: 100vh;
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 80vh;
-  background-color: #f4f4f4;
+  font-family:
+    Inter,
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    Arial,
+    sans-serif;
+
+  /* Fondo parecido al prototipo */
+  background: radial-gradient(circle at 75% 20%, #6b82bf 0%, #2a3e74 45%, #1b2b55 100%);
 }
-.login-box {
-  padding: 2rem;
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-  width: 100%;
-  max-width: 400px;
-}
-h2 {
-  text-align: center;
-  margin-bottom: 1.5rem;
-}
-.form-group {
-  margin-bottom: 1rem;
-}
-.form-group label {
-  display: block;
-  margin-bottom: 0.5rem;
-}
-.form-group input {
-  width: 100%;
-  padding: 0.8rem;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-}
-button {
-  width: 100%;
-  padding: 0.8rem;
-  background-color: #2c3e50;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  font-size: 1rem;
-  cursor: pointer;
-}
-button:disabled {
-  background-color: #95a5a6;
+
+.login-wrapper {
+  width: 1250px;
+  height: 700px;
+  display: flex;
+  border-radius: 22px;
+  overflow: hidden;
+  box-shadow: 0 50px 100px rgba(0, 0, 0, 0.45);
 }
 </style>

@@ -21,34 +21,7 @@ const router = createRouter({
     {
       path: '/login',
       name: 'login',
-      component: LoginView,
-    },
-
-    // RUTA DEL POS (Pantalla Completa)
-    {
-      path: '/ventas/pos',
-      name: 'venta-pos',
-      component: VentaPOSView,
-      meta: { requiresAuth: true, title: 'Punto de Venta' },
-    },
-    // --- VENTAS ---
-    {
-      path: '/ventas/presupuesto/nuevo',
-      name: 'venta-presupuesto-nuevo',
-      component: PresupuestoCreate,
-      meta: { title: 'Nuevo Presupuesto' },
-    },
-    {
-      path: '/ventas/remito/nuevo',
-      name: 'venta-remito-nuevo',
-      component: RemitoVentaCreate,
-      meta: { title: 'Nuevo Remito de Salida' },
-    },
-    {
-      path: '/ventas/factura-admin/nueva',
-      name: 'venta-factura-admin-nueva',
-      component: () => import('../views/ventas/FacturaVentaCreate.vue'),
-      meta: { title: 'Nueva Factura Administrativa' },
+      component: () => import('@/views/LoginView.vue'),
     },
 
     // RUTAS ADMINISTRATIVAS (Con Layout)
@@ -62,6 +35,40 @@ const router = createRouter({
           name: 'home',
           component: HomeView,
           meta: { title: 'Dashboard Ejecutivo' },
+        },
+
+        // ✅ POS AHORA DENTRO DEL LAYOUT (para que herede diseño/tema/drawer)
+        {
+          path: 'ventas/pos', // => /ventas/pos
+          name: 'venta-pos',
+          component: VentaPOSView,
+          meta: { title: 'Punto de Venta', posMode: true },
+        },
+
+        // --- VENTAS ---
+        {
+          path: 'ventas/presupuesto/nuevo', // => /ventas/presupuesto/nuevo
+          name: 'venta-presupuesto-nuevo',
+          component: PresupuestoCreate,
+          meta: { title: 'Nuevo Presupuesto' },
+        },
+        {
+          path: 'ventas/remito/nuevo', // => /ventas/remito/nuevo
+          name: 'venta-remito-nuevo',
+          component: RemitoVentaCreate,
+          meta: { title: 'Nuevo Remito de Salida' },
+        },
+        {
+          path: 'ventas/comprobantes',
+          name: 'consulta-comprobantes',
+          component: () => import('../views/ventas/ConsultaComprobantes.vue'),
+          meta: { title: 'Consulta de Comprobantes' },
+        },
+        {
+          path: 'ventas/factura-admin/nueva', // => /ventas/factura-admin/nueva
+          name: 'venta-factura-admin-nueva',
+          component: () => import('../views/ventas/FacturaVentaCreate.vue'),
+          meta: { title: 'Nueva Factura Administrativa' },
         },
 
         // --- INVENTARIO ---
@@ -85,43 +92,43 @@ const router = createRouter({
         },
 
         // --- COMPRAS ---
-        // 1. GESTIÓN DE PROVEEDORES
         {
           path: 'proveedores',
           name: 'proveedores-lista',
-          // Asegúrate que el archivo esté en src/views/compras/ProveedorListView.vue
           component: () => import('../views/compras/ProveedorListView.vue'),
           meta: { title: 'Gestión de Proveedores' },
         },
-
-        // 2. FACTURA (Nuevo archivo separado)
         {
           path: 'compras/factura/nueva',
           name: 'compra-factura-nueva',
-          // IMPORTANTE: Verifica que src/views/compras/FacturaCreate.vue exista
           component: () => import('../views/compras/FacturaCreate.vue'),
           meta: { title: 'Nueva Factura' },
         },
-
-        // 3. REMITO (Nuevo archivo separado)
         {
           path: 'compras/remito/nuevo',
           name: 'compra-remito-nuevo',
-          // IMPORTANTE: Verifica que src/views/compras/RemitoCreate.vue exista
           component: () => import('../views/compras/RemitoCreate.vue'),
           meta: { title: 'Nuevo Remito' },
         },
-
-        // 4. ORDEN DE COMPRA (Nuevo archivo separado)
         {
           path: 'compras/orden/nueva',
           name: 'compra-orden-nueva',
-          // IMPORTANTE: Verifica que src/views/compras/OrdenCompraCreate.vue exista
           component: () => import('../views/compras/OrdenCompraCreate.vue'),
           meta: { title: 'Nueva Orden de Compra' },
         },
+
+        // Carga Masiva (Importación de datos)
+        {
+          path: 'importar-datos',
+          name: 'importacion-masiva',
+          component: () => import('../views/parametros/ImportacionDatosView.vue'),
+          meta: { title: 'Importación Masiva' },
+        },
       ],
     },
+
+    // ✅ (Opcional) Ruta 404
+    // { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
 

@@ -1,44 +1,57 @@
 @import './base.css';
+@import './theme.css';
 
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* App root */
 #app {
   width: 100%;
-  height: 100vh; /* Ocupar toda la altura */
+  height: 100vh;
   margin: 0;
   padding: 0;
   font-weight: normal;
 }
-/*
-#app {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  font-weight: normal;
+
+/* =========================================
+   ANTI "AMBAR": RESET GLOBAL CONTROLADO
+   - corta halos/rings de origen incierto
+   - neutraliza filtros en SVG (muy común)
+   ========================================= */
+
+/* 1) Evitar halos por tap-highlight y outlines raros */
+* {
+  -webkit-tap-highlight-color: transparent;
 }
 
-a,
-.green {
-  text-decoration: none;
-  color: hsla(160, 100%, 37%, 1);
-  transition: 0.4s;
-  padding: 3px;
+/* 2) Quitar filtros/sombras heredadas que pueden teñir bordes y SVG */
+.card,
+.card *,
+.ant-layout,
+.ant-layout *,
+svg,
+svg * {
+  filter: none !important;
 }
 
-@media (hover: hover) {
-  a:hover {
-    background-color: hsla(160, 100%, 37%, 0.2);
-  }
+/* 3) Normalizar focus: NO queremos “ambar” por foco global
+   - quitamos outline/sombra global
+   - y reponemos foco accesible SOLO para inputs/botones/links */
+:where(*):focus {
+  outline: none !important;
+  box-shadow: none !important;
 }
 
-@media (min-width: 1024px) {
-  body {
-    display: flex;
-    place-items: center;
-  }
-
-  #app {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    padding: 0 2rem;
-  }
+/* Foco accesible (pro) */
+:where(a, button, input, textarea, select, [role='button'], [tabindex]):focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.55); /* azul pro */
+  outline-offset: 2px;
+  border-radius: 6px;
 }
-*/
+
+/* Ant Design: neutralizar ring de foco si aparece */
+:where(.ant-btn, .ant-input, .ant-select-selector, .ant-dropdown-trigger):focus,
+:where(.ant-btn, .ant-input, .ant-select-selector, .ant-dropdown-trigger):focus-visible {
+  box-shadow: none !important;
+}

@@ -1,65 +1,84 @@
-// en src/stores/auth.js (NUEVO ARCHIVO)
-
+// frontend/src/stores/auth.js
 import { defineStore } from 'pinia'
-import axios from 'axios'
 import { ref, computed } from 'vue'
+import api from '@/services/api'
 
-// Definimos el store de autenticación
 export const useAuthStore = defineStore('auth', () => {
-  // -- ESTADO --
-  // Guardaremos los tokens aquí. Los obtenemos de localStorage por si el usuario
-  // ya había iniciado sesión antes y refrescó la página.
+  // ===== STATE =====
   const accessToken = ref(localStorage.getItem('accessToken'))
   const refreshToken = ref(localStorage.getItem('refreshToken'))
-  const user = ref(null) // Podríamos guardar aquí info del usuario si quisiéramos
+  const user = ref(null)
+  const loading = ref(false)
 
-  // -- GETTERS (Propiedades Computadas) --
-  // Un getter para saber si el usuario está autenticado, simplemente
-  // verificando si existe el token de acceso.
   const isAuthenticated = computed(() => !!accessToken.value)
 
-  // -- ACCIONES --
-  // Acción para iniciar sesión
+  // ===== LOGIN =====
   async function login(username, password) {
+    loading.value = true
     try {
-      // Hacemos la petición al endpoint /api/token/ que creamos en Django
-      // Antes decía 127.0.0.1 o demo.localhost
-      const response = await axios.post('http://tenant1.localhost:8000/api/token/', {
-        username: username,
-        password: password,
+      const { data } = await api.post('/api/token/', {
+        username,
+        password,
       })
 
-      // Si es exitoso, guardamos los tokens en el estado
-      accessToken.value = response.data.access
-      refreshToken.value = response.data.refresh
+      accessToken.value = data.access
+      refreshToken.value = data.refresh
 
-      // Y también los guardamos en localStorage para persistir la sesión
-      localStorage.setItem('accessToken', accessToken.value)
-      localStorage.setItem('refreshToken', refreshToken.value)
+      localStorage.setItem('accessToken', data.access)
+      localStorage.setItem('refreshToken', data.refresh)
 
-      return true // Devolvemos true para indicar que el login fue exitoso
+      // Opcional: cargar datos del usuario
+      await fetchUser()
+
+      return true
     } catch (error) {
-      // Si hay un error, limpiamos cualquier token viejo y devolvemos false
-      logout()
       console.error('Error de autenticación:', error)
+      logout()
       return false
+    } finally {
+      loading.value = false
     }
   }
 
-  // Acción para cerrar sesión
+  // ===== CARGAR USUARIO ACTUAL =====
+  async function fetchUser() {
+    try {
+      const { data } = await api.get('/api/auth/me/')
+      user.value = data?.user || null
+    } catch (error) {
+      console.warn('No se pudo obtener el usuario:', error)
+      user.value = null
+    }
+  }
+
+  // ===== RESTAURAR SESIÓN (cuando refrescás la página) =====
+  async function restoreSession() {
+    if (!accessToken.value) return
+    try {
+      await fetchUser()
+    } catch {
+      logout()
+    }
+  }
+
+  // ===== LOGOUT =====
   function logout() {
     accessToken.value = null
     refreshToken.value = null
+    user.value = null
+
     localStorage.removeItem('accessToken')
     localStorage.removeItem('refreshToken')
-    // Normalmente aquí también redirigiríamos al login
   }
 
-  // Exponemos el estado y las acciones para que otros componentes puedan usarlos
   return {
     accessToken,
+    refreshToken,
+    user,
+    loading,
     isAuthenticated,
     login,
     logout,
+    restoreSession,
   }
 })

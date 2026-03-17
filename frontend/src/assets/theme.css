@@ -1,0 +1,144 @@
+/* =============================
+   THEME TOKENS
+   - Variables base por theme
+   - Sidebar + accent dinámico (vía CSS vars + overrides por JS)
+   ============================= */
+
+/* Tema LIGHT (corporativo) */
+:root.theme-light {
+  --app-bg: #f1f5f9;
+  --surface-0: #ffffff;
+  --surface-1: #ffffff;
+
+  --text-0: #0f172a;
+  --text-1: #334155;
+  --text-2: #64748b;
+
+  --border: rgba(15, 23, 42, 0.1);
+
+  /* Fallback si JS no corre */
+  --primary: #1e40af;
+  --primary-2: #2563eb;
+
+  /* RADIUS TOKENS */
+  --radius-lg: 10px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
+
+  /* Sombra neutra (sin tinte) */
+  --card-shadow: 0 10px 24px rgba(2, 6, 23, 0.1);
+
+  /* HEADER TOKENS */
+  --header-surface: rgba(255, 255, 255, 0.78);
+  --header-border: rgba(15, 23, 42, 0.08);
+  --header-text: rgba(15, 23, 42, 0.92);
+  --header-icon: rgba(15, 23, 42, 0.78);
+  --header-accent: var(--primary-2);
+  --header-hover: rgba(15, 23, 42, 0.05);
+  --header-pill-bg: rgba(15, 23, 42, 0.04);
+  --header-pill-border: rgba(15, 23, 42, 0.08);
+
+  /* Status tokens */
+  --status-warn: #b45309;
+  --status-warn-rgb: 180, 83, 9;
+  --status-ok: #15803d;
+  --status-ok-rgb: 21, 128, 61;
+
+  /* SIDEBAR (dinámico) */
+  --sider-gradient-top: #1e3a8a;
+  --sider-gradient-bottom: #0f172a;
+
+  /* Acento global ligado al sidebar (se sobreescribe desde JS) */
+  --sider-accent: #2563eb;
+  --accent-rgb: 37, 99, 235;
+
+  --sider-bg: linear-gradient(
+    180deg,
+    var(--sider-gradient-top) 0%,
+    var(--sider-gradient-bottom) 100%
+  );
+
+  /* Menu (fallback; JS los recalcula) */
+  --menu-hover-bg: rgba(255, 255, 255, 0.06);
+  --menu-active-bg: rgba(var(--accent-rgb), 0.18);
+  --menu-active-border: rgba(255, 255, 255, 0.92);
+  --menu-active-strong: rgba(255, 255, 255, 0.96);
+
+  /* Chart (dinámico por accent-rgb) */
+  --chart-grid: rgba(148, 163, 184, 0.22);
+  --chart-line-base: rgba(var(--accent-rgb), 0.28);
+  --chart-line: rgba(var(--accent-rgb), 0.78);
+  --chart-area-top: rgba(var(--accent-rgb), 0.18);
+  --chart-area-bottom: rgba(var(--accent-rgb), 0);
+  --chart-shimmer-0: rgba(var(--accent-rgb), 0);
+  --chart-shimmer-1: rgba(var(--accent-rgb), 0.92);
+  --chart-shimmer-2: rgba(var(--accent-rgb), 0);
+  --chart-glow: rgba(var(--accent-rgb), 0.35);
+}
+
+/* Tema DARK */
+:root.theme-dark {
+  --app-bg: #0b1020;
+  --surface-0: #0f172a;
+  --surface-1: #111827;
+
+  --text-0: #e5e7eb;
+  --text-1: #cbd5e1;
+  --text-2: #94a3b8;
+
+  --border: rgba(148, 163, 184, 0.12);
+
+  /* Fallback si JS no corre */
+  --primary: #3b82f6;
+  --primary-2: #60a5fa;
+
+  --radius-lg: 10px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
+
+  --card-shadow: 0 18px 45px rgba(0, 0, 0, 0.45);
+
+  --header-surface: rgba(15, 23, 42, 0.72);
+  --header-border: rgba(148, 163, 184, 0.12);
+  --header-text: rgba(255, 255, 255, 0.92);
+  --header-icon: rgba(255, 255, 255, 0.82);
+  --header-accent: var(--primary-2);
+  --header-hover: rgba(255, 255, 255, 0.06);
+  --header-pill-bg: rgba(255, 255, 255, 0.06);
+  --header-pill-border: rgba(148, 163, 184, 0.14);
+
+  /* Status tokens */
+  --status-warn: #f59e0b;
+  --status-warn-rgb: 245, 158, 11;
+  --status-ok: #22c55e;
+  --status-ok-rgb: 34, 197, 94;
+
+  /* SIDEBAR (dinámico) */
+  --sider-gradient-top: #070b14;
+  --sider-gradient-bottom: #0f172a;
+
+  /* Acento global ligado al sidebar (se sobreescribe desde JS) */
+  --sider-accent: #60a5fa;
+  --accent-rgb: 96, 165, 250;
+
+  --sider-bg: linear-gradient(
+    180deg,
+    var(--sider-gradient-top) 0%,
+    var(--sider-gradient-bottom) 100%
+  );
+
+  --menu-hover-bg: rgba(255, 255, 255, 0.06);
+  --menu-active-bg: rgba(var(--accent-rgb), 0.18);
+  --menu-active-border: rgba(255, 255, 255, 0.92);
+  --menu-active-strong: rgba(255, 255, 255, 0.96);
+
+  --chart-grid: rgba(148, 163, 184, 0.16);
+  --chart-line-base: rgba(var(--accent-rgb), 0.28);
+  --chart-line: rgba(var(--accent-rgb), 0.78);
+  --chart-area-top: rgba(var(--accent-rgb), 0.16);
+  --chart-area-bottom: rgba(var(--accent-rgb), 0);
+  --chart-shimmer-0: rgba(var(--accent-rgb), 0);
+  --chart-shimmer-1: rgba(var(--accent-rgb), 0.95);
+  --chart-shimmer-2: rgba(var(--accent-rgb), 0);
+  --chart-glow: rgba(var(--accent-rgb), 0.35);
+}

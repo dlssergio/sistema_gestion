@@ -1,16 +1,29 @@
 <script setup>
-import { onMounted } from 'vue'
+import { onMounted, watch } from 'vue'
 import { RouterView } from 'vue-router'
 import { useConfigStore } from './stores/config'
+import { useAuthStore } from '@/stores/auth'
 
+const auth = useAuthStore()
 const configStore = useConfigStore()
 
-onMounted(async () => {
-  // Intentamos cargar configuración (logo, nombre) si es posible
-  try {
-    await configStore.cargarConfiguracion()
-  } catch (e) {}
+onMounted(() => {
+  auth.restoreSession?.()
 })
+
+// Cuando se autentica, recién ahí pedimos la configuración de empresa
+watch(
+  () => auth.isAuthenticated,
+  async (isAuth) => {
+    if (!isAuth) return
+    try {
+      await configStore.cargarConfiguracion()
+    } catch (e) {
+      console.error('[Config] no se pudo cargar configuración:', e)
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -24,17 +37,10 @@ body {
   padding: 0 !important;
   height: 100%;
   width: 100%;
-  font-family:
-    'Inter',
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    Roboto,
-    Helvetica,
-    Arial,
-    sans-serif;
-  background-color: #f0f2f5; /* Color de fondo base del admin */
-  overflow-x: hidden; /* Evita scroll horizontal innecesario */
+  font-family: var(--font-sans, Manrope, Inter, system-ui, -apple-system, 'Segoe UI', Roboto);
+  background: var(--app-bg, #f1f5f9);
+  color: var(--text-0, #0f172a);
+  overflow-x: hidden;
 }
 
 #app {
