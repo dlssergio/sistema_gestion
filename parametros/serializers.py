@@ -6,10 +6,10 @@ from .models import (
     Moneda,
     Impuesto,
     CategoriaImpositiva,
-    ConfiguracionEmpresa
+    ConfiguracionEmpresa,
+    CargaMasiva
 )
 from entidades.serializers import EntidadSerializer
-
 
 class MonedaSerializer(serializers.ModelSerializer):
     class Meta:
@@ -58,3 +58,22 @@ class ConfiguracionEmpresaSerializer(serializers.ModelSerializer):
             'inicio_actividades', 'ingresos_brutos',
             'moneda_principal', 'entidad', 'entidad_data'
         ]
+
+
+class CargaMasivaSerializer(serializers.ModelSerializer):
+    porcentaje_progreso = serializers.SerializerMethodField()
+    estado_display = serializers.CharField(source='get_estado_display', read_only=True)
+
+    class Meta:
+        model = CargaMasiva
+        fields = '__all__'
+        read_only_fields = (
+            'estado', 'total_filas', 'filas_procesadas',
+            'filas_exitosas', 'filas_error', 'detalle_errores',
+            'usuario', 'creado_en', 'actualizado_en'
+        )
+
+    def get_porcentaje_progreso(self, obj):
+        if obj.total_filas == 0:
+            return 0
+        return int((obj.filas_procesadas / obj.total_filas) * 100)

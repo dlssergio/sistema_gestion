@@ -1,48 +1,402 @@
-# ventas/views.py (VERSIÓN DEFINITIVA: SMTP DB + HTML DB + APIS)
+# ventas/views.py
+# VERSIÓN CORREGIDA:
+# - Mantiene create/update con DRF
+# - Registra pagos múltiples
+# - Calcula recargo por PlanCuota desde backend
+# - Agrega / reemplaza artículo RECARGO_FIN
+# - Crea CuponTarjeta para pagos con tarjeta
+# - Guarda lote / cupón / observaciones / referencia
+# - Funciona tanto en CREATE como en UPDATE (finalización de borradores)
 
 import json
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
+
+from django.apps import apps
 from django.http import JsonResponse, HttpResponse
 from django.db import transaction, models
+from django.db.models import Q
+import datetime
 from django.shortcuts import get_object_or_404, render
 from django.template.loader import render_to_string
-# --- IMPORT NUEVO PARA RENDERIZAR HTML DESDE BD ---
 from django.template import Template, Context
 from django.views.decorators.http import require_POST
 from django.utils import timezone
 from django.contrib.admin.views.decorators import staff_member_required
-from rest_framework import viewsets, status
-from rest_framework.response import Response
 from django.core.exceptions import ValidationError
+from django.core.mail import EmailMessage, get_connection
 from dataclasses import asdict as dc_asdict
 
-# --- IMPORTS PARA EMAIL Y CONEXIÓN DINÁMICA ---
-from django.core.mail import EmailMessage, get_connection
-from django.conf import settings
-
-from .utils_pdf import generar_qr_afip
-from .models import DisenoImpresion
-
-# Externos
-from djmoney.money import Money
-import weasyprint
-
-# Modelos
-from inventario.models import Articulo
-from .models import ComprobanteVenta, ComprobanteVentaItem, Cliente, Recibo
-from parametros.models import TipoComprobante, SerieDocumento
-from parametros.models import ConfiguracionEmpresa
-from parametros.models import ConfiguracionSMTP
-
-# Servicios y Serializers
-from .services import TaxCalculatorService, PricingService
-from .serializers import ComprobanteVentaSerializer, ComprobanteVentaCreateSerializer
+from rest_framework import viewsets, status
+from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
+from djmoney.money import Money
+import weasyprint
+
+from inventario.models import Articulo
+from parametros.models import (
+    TipoComprobante,
+    SerieDocumento,
+    ConfiguracionEmpresa,
+    ConfiguracionSMTP,
+)
+from finanzas.models import (
+    TipoValor,
+    CuentaFondo,
+    Banco,
+    PlanCuota,
+    CuponTarjeta,
+)
+
+from .utils_pdf import generar_qr_afip
+from .models import (
+    DisenoImpresion,
+    ComprobanteVenta,
+    ComprobanteVentaItem,
+    Cliente,
+    Recibo,
+    ReciboValor,
+    ReciboImputacion,
+)
+from .services import TaxCalculatorService, PricingService
+from .serializers import ComprobanteVentaSerializer, ComprobanteVentaCreateSerializer
 
 # ==============================================================================
-# --- VISTAS API Y REPORTES (INTACTAS) ---
+# --- HELPERS INTERNOS PARA POS / API ---
+# ==============================================================================
+
+DECIMAL_2 = Decimal("0.01")
+
+
+def _to_decimal(value, default="0"):
+    if value is None or value == "":
+        return Decimal(default)
+    if hasattr(value, "amount"):
+        try:
+            return Decimal(str(value.amount))
+        except Exception:
+            return Decimal(default)
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return Decimal(default)
+
+
+def _q2(value: Decimal) -> Decimal:
+    return _to_decimal(value).quantize(DECIMAL_2, rounding=ROUND_HALF_UP)
+
+
+def _get_default_deposito():
+    from inventario.models import Deposito
+    return Deposito.objects.filter(es_principal=True).first()
+
+
+def _get_or_create_recargo_article():
+    """
+    Replica la lógica del admin:
+    crea o recupera el artículo RECARGO_FIN.
+    """
+    ArticuloModel = apps.get_model("inventario", "Articulo")
+    RubroModel = apps.get_model("inventario", "Rubro")
+
+    rubro_financiero, _ = RubroModel.objects.get_or_create(nombre="Financiero/Recargos")
+
+    articulo_recargo, _ = ArticuloModel.objects.get_or_create(
+        cod_articulo="RECARGO_FIN",
+        defaults={
+            "descripcion": "Recargo Financiero / Intereses",
+            "precio_venta_monto": Decimal("0.00"),
+            "administra_stock": False,
+            "esta_activo": True,
+            "rubro": rubro_financiero,
+        },
+    )
+    return articulo_recargo
+
+
+def _remove_existing_recargo_item(comprobante):
+    try:
+        comprobante.items.filter(articulo__cod_articulo="RECARGO_FIN").delete()
+    except Exception:
+        pass
+
+
+def _resolve_plan_cuota_from_pago(pago):
+    opcion_cuota_id = pago.get("opcion_cuota")
+    if not opcion_cuota_id:
+        return None
+    return (
+        PlanCuota.objects
+        .select_related("plan", "plan__tarjeta")
+        .filter(pk=opcion_cuota_id)
+        .first()
+    )
+
+
+def _infer_tipo_valor_from_pago(pago):
+    tipo_valor_id = pago.get("tipo_valor")
+    if tipo_valor_id:
+        return TipoValor.objects.get(pk=tipo_valor_id)
+
+    metodo = (pago.get("metodo") or "").upper()
+
+    if metodo == "EF":
+        tipo = TipoValor.objects.filter(nombre__icontains="efect").order_by("id").first()
+    elif metodo == "TR":
+        tipo = (
+            TipoValor.objects.filter(nombre__icontains="transfer").order_by("id").first()
+            or TipoValor.objects.filter(nombre__icontains="transf").order_by("id").first()
+        )
+    elif metodo == "DB":
+        tipo = (
+            TipoValor.objects.filter(es_tarjeta=True, nombre__icontains="déb").first()
+            or TipoValor.objects.filter(es_tarjeta=True, nombre__icontains="deb").first()
+            or TipoValor.objects.filter(es_tarjeta=True, nombre__icontains="débito").first()
+            or TipoValor.objects.filter(es_tarjeta=True, nombre__icontains="debito").first()
+            or TipoValor.objects.filter(es_tarjeta=True).order_by("id").first()
+        )
+    elif metodo == "CR":
+        tipo = (
+            TipoValor.objects.filter(es_tarjeta=True, nombre__icontains="créd").first()
+            or TipoValor.objects.filter(es_tarjeta=True, nombre__icontains="cred").first()
+            or TipoValor.objects.filter(es_tarjeta=True, nombre__icontains="crédito").first()
+            or TipoValor.objects.filter(es_tarjeta=True, nombre__icontains="credito").first()
+            or TipoValor.objects.filter(es_tarjeta=True).order_by("id").first()
+        )
+    else:
+        tipo = None
+
+    if not tipo:
+        raise ValidationError("No se pudo inferir el tipo de valor del pago.")
+    return tipo
+
+
+def _resolve_destino_from_pago(pago):
+    destino_id = pago.get("destino")
+    if destino_id:
+        return CuentaFondo.objects.get(pk=destino_id)
+
+    metodo = (pago.get("metodo") or "").upper()
+
+    # Reglas pedidas por vos:
+    # EF -> Caja Principal (id 1)
+    # Tarjetas -> A Depositar - Tarjetas (id 3)
+    if metodo == "EF":
+        destino = CuentaFondo.objects.filter(pk=1, activa=True).first()
+        if destino:
+            return destino
+        destino = (
+            CuentaFondo.objects.filter(activa=True, tipo=CuentaFondo.Tipo.EFECTIVO).order_by("id").first()
+            or CuentaFondo.objects.filter(activa=True).order_by("id").first()
+        )
+        if not destino:
+            raise ValidationError("No existe una cuenta/caja destino activa para efectivo.")
+        return destino
+
+    if metodo in ("DB", "CR"):
+        destino = CuentaFondo.objects.filter(pk=3, activa=True).first()
+        if destino:
+            return destino
+        raise ValidationError("No existe la cuenta puente de tarjetas (id 3) o no está activa.")
+
+    raise ValidationError("Falta 'destino' para el pago informado.")
+
+
+def _create_or_replace_recargo_item(comprobante, recargo_total):
+    """
+    Borra cualquier RECARGO_FIN previo y crea uno nuevo si corresponde.
+    """
+    _remove_existing_recargo_item(comprobante)
+
+    recargo_total = _q2(recargo_total)
+    if recargo_total <= 0:
+        return None
+
+    articulo_recargo = _get_or_create_recargo_article()
+    return ComprobanteVentaItem.objects.create(
+        comprobante=comprobante,
+        articulo=articulo_recargo,
+        cantidad=Decimal("1.000"),
+        precio_unitario_original=recargo_total,
+    )
+
+
+def _recalcular_totales_comprobante(comprobante):
+    subtotal = Decimal("0.00")
+    for item in comprobante.items.all():
+        subtotal += _q2(getattr(item, "subtotal", 0))
+
+    desglose_impuestos = TaxCalculatorService.calcular_impuestos_comprobante(comprobante, "venta")
+    total_impuestos = sum((_to_decimal(v) for v in desglose_impuestos.values()), Decimal("0.00"))
+
+    comprobante.subtotal = _q2(subtotal)
+    comprobante.impuestos = {k: str(_q2(v)) for k, v in desglose_impuestos.items()}
+    comprobante.total = _q2(subtotal + total_impuestos)
+    comprobante.saldo_pendiente = comprobante.total
+    comprobante.save(update_fields=["subtotal", "impuestos", "total", "saldo_pendiente"])
+
+
+def _normalizar_pagos_y_aplicar_recargos(comprobante, pagos_data):
+    """
+    Replica la lógica del admin.save_formset() para POS/API:
+    - si hay opcion_cuota con coeficiente > 1, calcula interés
+    - suma el interés al monto del pago
+    - agrega ítem RECARGO_FIN al comprobante
+    """
+    pagos_normalizados = []
+    recargo_total = Decimal("0.00")
+
+    for pago in pagos_data or []:
+        pago = dict(pago or {})
+
+        monto_base = _q2(pago.get("monto", 0))
+        if monto_base <= 0:
+            continue
+
+        plan_cuota = _resolve_plan_cuota_from_pago(pago)
+        recargo_monto = Decimal("0.00")
+
+        if plan_cuota and _to_decimal(plan_cuota.coeficiente) > Decimal("1"):
+            recargo_monto = _q2(monto_base * (_to_decimal(plan_cuota.coeficiente) - Decimal("1")))
+            monto_final = _q2(monto_base + recargo_monto)
+        else:
+            monto_final = monto_base
+
+        pago["_plan_cuota_obj"] = plan_cuota
+        pago["_monto_base"] = monto_base
+        pago["_recargo_monto_backend"] = recargo_monto
+        pago["_monto_final"] = monto_final
+
+        pagos_normalizados.append(pago)
+        recargo_total += recargo_monto
+
+    _create_or_replace_recargo_item(comprobante, recargo_total)
+    _recalcular_totales_comprobante(comprobante)
+
+    return pagos_normalizados, _q2(recargo_total)
+
+
+def _create_cupon_tarjeta_from_pago(comprobante, pago, monto_final):
+    """
+    Replica lo que hace el admin: crea cupón si el pago es tarjeta y tiene plan.
+    """
+    plan_cuota = pago.get("_plan_cuota_obj")
+    if not plan_cuota:
+        return None
+
+    plan_maestro = plan_cuota.plan
+    if not plan_maestro or not plan_maestro.tarjeta:
+        return None
+
+    tarjeta_cupon = (pago.get("tarjeta_cupon") or pago.get("cupon") or pago.get("referencia") or "S/N").strip()
+    tarjeta_lote = (pago.get("tarjeta_lote") or pago.get("lote") or "").strip()
+
+    return CuponTarjeta.objects.create(
+        tarjeta=plan_maestro.tarjeta,
+        plan=plan_maestro,
+        cupon=tarjeta_cupon or "S/N",
+        lote=tarjeta_lote,
+        cuotas=plan_cuota.cuotas,
+        monto=_q2(monto_final),
+        fecha_operacion=comprobante.fecha,
+        estado=CuponTarjeta.Estado.PENDIENTE,
+    )
+
+
+def _registrar_pagos_contado(comprobante, request, pagos_data):
+    """
+    Registra recibo + valores + imputación + movimientos.
+    """
+    if not pagos_data:
+        return
+
+    if comprobante.condicion_venta != ComprobanteVenta.CondicionVenta.CONTADO:
+        return
+
+    recibo = Recibo.objects.create(
+        cliente=comprobante.cliente,
+        fecha=comprobante.fecha,
+        estado=Recibo.Estado.CONFIRMADO,
+        origen=Recibo.Origen.CONTADO,
+        observaciones=f"Cobro auto. Factura {comprobante.numero_completo}",
+        creado_por=request.user,
+    )
+
+    total_pagado = Decimal("0.00")
+
+    for pago in pagos_data:
+        monto_final = _q2(pago.get("_monto_final", pago.get("monto", 0)))
+        if monto_final <= 0:
+            continue
+
+        tipo_valor = _infer_tipo_valor_from_pago(pago)
+        destino = _resolve_destino_from_pago(pago)
+
+        banco_origen = None
+        banco_origen_id = pago.get("banco_origen")
+        if banco_origen_id:
+            banco_origen = Banco.objects.get(pk=banco_origen_id)
+
+        if tipo_valor.requiere_banco and not banco_origen:
+            raise ValidationError(f"El tipo de valor '{tipo_valor.nombre}' requiere banco de origen.")
+
+        cupon_obj = None
+        observaciones = (pago.get("observaciones") or pago.get("nota") or "").strip()
+
+        if tipo_valor.es_tarjeta:
+            cupon_obj = _create_cupon_tarjeta_from_pago(comprobante, pago, monto_final)
+
+            lote = (pago.get("tarjeta_lote") or pago.get("lote") or "").strip()
+            cupon = (pago.get("tarjeta_cupon") or pago.get("cupon") or "").strip()
+
+            detalles = []
+            if cupon:
+                detalles.append(f"Cupón: {cupon}")
+            if lote:
+                detalles.append(f"Lote: {lote}")
+
+            plan_cuota = pago.get("_plan_cuota_obj")
+            if plan_cuota:
+                detalles.append(f"{plan_cuota.plan.nombre} - {plan_cuota.cuotas} cuotas")
+
+            if detalles:
+                detalles_txt = " | ".join(detalles)
+                observaciones = f"{detalles_txt} - {observaciones}".strip(" -")
+
+        ReciboValor.objects.create(
+            recibo=recibo,
+            tipo=tipo_valor,
+            monto=monto_final,
+            destino=destino,
+            observaciones=observaciones,
+            banco_origen=banco_origen,
+            referencia=(pago.get("referencia") or pago.get("nota") or pago.get("tarjeta_cupon") or ""),
+            fecha_cobro=pago.get("fecha_cobro") or None,
+            cuit_librador=(pago.get("cuit_librador") or ""),
+        )
+
+        total_pagado += monto_final
+
+    if total_pagado <= 0:
+        raise ValidationError("No se registraron montos de pago válidos.")
+
+    # En contado la imputación debe cancelar el comprobante completo
+    ReciboImputacion.objects.create(
+        recibo=recibo,
+        comprobante=comprobante,
+        monto_imputado=comprobante.total,
+    )
+
+    recibo.monto_total = _q2(total_pagado)
+    recibo.save(update_fields=["monto_total"])
+
+    recibo.aplicar_finanzas()
+    comprobante.refresh_from_db()
+
+
+# ==============================================================================
+# --- VISTAS API Y REPORTES ---
 # ==============================================================================
 
 @staff_member_required
@@ -109,9 +463,11 @@ def calcular_totales_api(request):
                 self.tipo_comprobante = TipoComprobante.objects.get(pk=tipo_id) if tipo_id else None
 
             @property
-            def items(self): return self
+            def items(self):
+                return self
 
-            def all(self): return self.items_list
+            def all(self):
+                return self.items_list
 
         fake_items = []
         for item in items_data:
@@ -194,81 +550,112 @@ def reporte_cuenta_corriente(request, cliente_pk):
 
 class ComprobanteVentaViewSet(viewsets.ModelViewSet):
     from .serializers import ComprobanteVentaSerializer, ComprobanteVentaCreateSerializer
+
     queryset = ComprobanteVenta.objects.all().order_by('-fecha', '-numero')
     search_fields = ['numero', 'cliente__entidad__razon_social']
+
+    def get_queryset(self):
+        qs = ComprobanteVenta.objects.select_related(
+            'cliente__entidad',
+            'tipo_comprobante',
+        ).prefetch_related('items__articulo').order_by('-fecha', '-numero')
+
+        p = self.request.query_params
+
+        # Estado: BR / CN / AN
+        estado = p.get('estado')
+        if estado:
+            qs = qs.filter(estado=estado)
+
+        # Tipo de comprobante (id)
+        tipo = p.get('tipo_comprobante')
+        if tipo:
+            try:
+                qs = qs.filter(tipo_comprobante_id=int(tipo))
+            except (ValueError, TypeError):
+                pass
+
+        # Condición de venta: CO / CC
+        condicion = p.get('condicion_venta')
+        if condicion:
+            qs = qs.filter(condicion_venta=condicion)
+
+        # Búsqueda libre: número, razón social, CUIT, CAE
+        search = (p.get('search') or '').strip()
+        if search:
+            qs = qs.filter(
+                Q(numero__icontains=search) |
+                Q(cliente__entidad__razon_social__icontains=search) |
+                Q(cliente__entidad__cuit__icontains=search) |
+                Q(cae__icontains=search)
+            ).distinct()
+
+        # Rango de fechas (YYYY-MM-DD)
+        fecha_desde = p.get('fecha_desde')
+        if fecha_desde:
+            try:
+                qs = qs.filter(fecha__date__gte=datetime.date.fromisoformat(fecha_desde))
+            except ValueError:
+                pass
+
+        fecha_hasta = p.get('fecha_hasta')
+        if fecha_hasta:
+            try:
+                qs = qs.filter(fecha__date__lte=datetime.date.fromisoformat(fecha_hasta))
+            except ValueError:
+                pass
+
+        return qs
 
     def get_serializer_class(self):
         if self.action in ['create', 'update', 'partial_update']:
             return ComprobanteVentaCreateSerializer
         return ComprobanteVentaSerializer
 
+    def _resolver_serie_y_deposito(self, datos_comprobante):
+        if not datos_comprobante.get('serie'):
+            tipo = datos_comprobante.get('tipo_comprobante')
+            punto_venta = datos_comprobante.get('punto_venta', 1)
+            serie = SerieDocumento.objects.filter(
+                tipo_comprobante=tipo,
+                punto_venta=punto_venta,
+                activo=True
+            ).first()
+            if serie:
+                datos_comprobante['serie'] = serie
+
+        if not datos_comprobante.get('deposito'):
+            if datos_comprobante.get('serie') and datos_comprobante['serie'].deposito_defecto:
+                datos_comprobante['deposito'] = datos_comprobante['serie'].deposito_defecto
+            else:
+                principal = _get_default_deposito()
+                if principal:
+                    datos_comprobante['deposito'] = principal
+
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
         try:
             with transaction.atomic():
                 items_data = serializer.validated_data.pop('items')
                 datos_comprobante = serializer.validated_data
-
-                if not datos_comprobante.get('serie'):
-                    tipo = datos_comprobante.get('tipo_comprobante')
-                    punto_venta = datos_comprobante.get('punto_venta', 1)
-                    serie = SerieDocumento.objects.filter(
-                        tipo_comprobante=tipo,
-                        punto_venta=punto_venta,
-                        activo=True
-                    ).first()
-                    if serie:
-                        datos_comprobante['serie'] = serie
-
-                if not datos_comprobante.get('deposito'):
-                    if datos_comprobante.get('serie') and datos_comprobante['serie'].deposito_defecto:
-                        datos_comprobante['deposito'] = datos_comprobante['serie'].deposito_defecto
-                    else:
-                        from inventario.models import Deposito
-                        principal = Deposito.objects.filter(es_principal=True).first()
-                        if principal:
-                            datos_comprobante['deposito'] = principal
+                self._resolver_serie_y_deposito(datos_comprobante)
 
                 comprobante = ComprobanteVenta.objects.create(**datos_comprobante)
-                subtotal_acumulado = Decimal(0)
 
                 for item_data in items_data:
-                    item_creado = ComprobanteVentaItem.objects.create(comprobante=comprobante, **item_data)
-                    subtotal_acumulado += item_creado.subtotal
+                    ComprobanteVentaItem.objects.create(comprobante=comprobante, **item_data)
 
-                desglose_impuestos = TaxCalculatorService.calcular_impuestos_comprobante(comprobante, 'venta')
-                total_impuestos = sum(desglose_impuestos.values())
-
-                comprobante.subtotal = subtotal_acumulado
-                comprobante.impuestos = {k: str(v) for k, v in desglose_impuestos.items()}
-                comprobante.total = subtotal_acumulado + total_impuestos
-                comprobante.saldo_pendiente = comprobante.total
-                comprobante.save()
+                _recalcular_totales_comprobante(comprobante)
 
                 pagos_data = request.data.get('pagos', [])
-                if pagos_data and comprobante.condicion_venta == ComprobanteVenta.CondicionVenta.CONTADO:
-                    recibo = Recibo.objects.create(
-                        cliente=comprobante.cliente,
-                        fecha=comprobante.fecha,
-                        estado=Recibo.Estado.CONFIRMADO,
-                        origen=Recibo.Origen.CONTADO,
-                        observaciones=f"Cobro auto. Factura {comprobante.numero_completo}",
-                        creado_por=request.user
-                    )
-                    # Crear Valores (Efectivo, etc)
-                    from finanzas.models import TipoValor, CuentaFondo
-                    caja_default = CuentaFondo.objects.first()  # Simplificación: Primera caja
-                    tipo_efectivo = TipoValor.objects.filter(nombre__icontains="Efectivo").first()
+                pagos_normalizados, _recargo_total = _normalizar_pagos_y_aplicar_recargos(comprobante, pagos_data)
 
-                    total_pagado = Decimal(0)
-                    for p in pagos_data:
-                        monto = Decimal(str(p.get('monto', 0)))
-                        if monto > 0:
-                            # Crear ReciboValor
-                            # (Aquí deberías buscar el TipoValor real según p['metodo'])
-                            pass
-                            # ... Lógica de creación de ReciboValor ...
+                if pagos_normalizados and comprobante.condicion_venta == ComprobanteVenta.CondicionVenta.CONTADO:
+                    _registrar_pagos_contado(comprobante, request, pagos_normalizados)
+
+                comprobante.refresh_from_db()
 
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -277,9 +664,55 @@ class ComprobanteVentaViewSet(viewsets.ModelViewSet):
         headers = self.get_success_headers(read_serializer.data)
         return Response(read_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
+    def update(self, request, *args, **kwargs):
+        """
+        Soporta PATCH/PUT con nested items.
+        Además:
+        - recalcula recargos backend por pagos
+        - agrega RECARGO_FIN
+        - registra recibo si pasa a contado con pagos
+        """
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            with transaction.atomic():
+                comprobante = serializer.save()
+
+                # Si el serializer actualizó items, recalculamos primero base
+                _recalcular_totales_comprobante(comprobante)
+
+                pagos_data = request.data.get('pagos', [])
+                pagos_normalizados, _recargo_total = _normalizar_pagos_y_aplicar_recargos(comprobante, pagos_data)
+
+                if pagos_normalizados and comprobante.condicion_venta == ComprobanteVenta.CondicionVenta.CONTADO:
+                    ya_existe = Recibo.objects.filter(
+                        cliente=comprobante.cliente,
+                        origen=Recibo.Origen.CONTADO,
+                        observaciones__icontains=comprobante.numero_completo
+                    ).exists()
+
+                    if not ya_existe:
+                        _registrar_pagos_contado(comprobante, request, pagos_normalizados)
+
+                comprobante.refresh_from_db()
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        read_serializer = ComprobanteVentaSerializer(comprobante)
+        return Response(read_serializer.data, status=status.HTTP_200_OK)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
 
 # ==============================================================================
-# --- SECCIÓN REFACTORIZADA: PDF Y EMAILS AVANZADOS ---
+# --- SECCIÓN PDF Y EMAILS ---
 # ==============================================================================
 
 def obtener_contexto_pdf(comprobante, request=None):
@@ -288,7 +721,6 @@ def obtener_contexto_pdf(comprobante, request=None):
     """
     config = ConfiguracionEmpresa.objects.first()
 
-    # Roles Fiscales
     discrimina_iva = comprobante.letra in ['A', 'B', 'M']
     es_monotributo = comprobante.letra == 'C'
 
@@ -301,7 +733,7 @@ def obtener_contexto_pdf(comprobante, request=None):
 
         try:
             tasa = item.articulo.iva if item.articulo and item.articulo.iva else Decimal("21.00")
-        except:
+        except Exception:
             tasa = Decimal("21.00")
 
         factor_iva = 1 + (tasa / 100)
@@ -317,7 +749,7 @@ def obtener_contexto_pdf(comprobante, request=None):
 
         items_impresion.append({
             'codigo': item.articulo.cod_articulo if item.articulo else '-',
-            'descripcion': item.articulo.descripcion,
+            'descripcion': item.articulo.descripcion if item.articulo else '-',
             'cantidad': cantidad,
             'unidad': 'Unid.',
             'precio_unitario': precio_unitario_mostrar,
@@ -339,10 +771,8 @@ def obtener_contexto_pdf(comprobante, request=None):
     if config and config.logo and request:
         logo_url = request.build_absolute_uri(config.logo.url)
 
-    # Selección Dinámica de Reporte (Archivo o BD)
-    template_name = 'ventas/pdf/factura_premium.html'  # Default
+    template_name = 'ventas/pdf/factura_premium.html'
     if comprobante.serie and comprobante.serie.diseno_impresion:
-        # El template name se usa como fallback o referencia
         template_name = comprobante.serie.diseno_impresion.archivo_template
 
     return {
@@ -367,29 +797,23 @@ def generar_pdf_bytes(comprobante, request):
     SOPORTE AVANZADO: Renderiza desde archivo físico O desde código HTML en BD.
     """
     context_dict = obtener_contexto_pdf(comprobante, request)
-    # Sacamos el nombre por defecto del contexto para limpieza
     default_template_name = context_dict.pop('template_name')
 
     html_string = ""
-
-    # 1. Verificar si hay un diseño personalizado cargado en Base de Datos
-    # (Asumiendo que has agregado el campo 'contenido_html' al modelo DisenoImpresion)
     diseno = None
+
     if comprobante.serie and comprobante.serie.diseno_impresion:
         diseno = comprobante.serie.diseno_impresion
 
-    # Si el diseño tiene contenido HTML guardado, lo usamos (Prioridad Alta)
     if diseno and hasattr(diseno, 'contenido_html') and diseno.contenido_html:
         try:
             template = Template(diseno.contenido_html)
             context = Context(context_dict)
             html_string = template.render(context)
         except Exception as e:
-            # Fallback de seguridad si falla el renderizado del HTML de la BD
             print(f"Error renderizando plantilla de BD: {e}. Usando archivo por defecto.")
             html_string = render_to_string(default_template_name, context_dict, request=request)
     else:
-        # 2. Si no, usamos el archivo físico (Comportamiento Estándar)
         html_string = render_to_string(default_template_name, context_dict, request=request)
 
     pdf_file = weasyprint.HTML(
@@ -400,20 +824,16 @@ def generar_pdf_bytes(comprobante, request):
     return pdf_file
 
 
-# En ventas/views.py
-
 def enviar_comprobante_por_email(comprobante, request):
     """
     Envía el comprobante por email usando configuración SMTP de Base de Datos.
     Soporta HTML completo en el cuerpo del mensaje.
     """
-    # 1. Validar Email del Cliente
     entidad = comprobante.cliente.entidad
     email_destino = getattr(entidad, 'email', None)
     if not email_destino:
         return False, f"El cliente '{entidad.razon_social}' no tiene un email cargado."
 
-    # 2. Buscar Configuración SMTP Activa
     config_smtp = ConfiguracionSMTP.objects.filter(activo=True).first()
     if not config_smtp:
         return False, "Error: No hay un servidor de correo configurado (Parámetros > Config SMTP)."
@@ -421,7 +841,6 @@ def enviar_comprobante_por_email(comprobante, request):
     host_real = config_smtp.host_custom if config_smtp.host == 'custom' else config_smtp.host
 
     try:
-        # 3. Establecer Conexión
         connection = get_connection(
             host=host_real,
             port=config_smtp.puerto,
@@ -431,14 +850,11 @@ def enviar_comprobante_por_email(comprobante, request):
             use_ssl=config_smtp.usar_ssl
         )
 
-        # 4. Generar PDF
         pdf_content = generar_pdf_bytes(comprobante, request)
         filename = f"{comprobante.tipo_comprobante.nombre}_{comprobante.numero_completo}.pdf"
 
-        # 5. Preparar Variables para la Plantilla
         nombre_empresa = getattr(comprobante, 'empresa_nombre_fantasia', 'Nuestra Empresa')
 
-        # Diccionario de contexto (Datos que puedes usar en el HTML)
         context_data = {
             'cliente': entidad.razon_social,
             'numero': comprobante.numero_completo,
@@ -446,10 +862,9 @@ def enviar_comprobante_por_email(comprobante, request):
             'empresa': nombre_empresa,
             'vencimiento': comprobante.vto_cae.strftime('%d/%m/%Y') if comprobante.vto_cae else '-',
             'total': f"${comprobante.total:,.2f}",
-            'link_pago': "https://tupagina.com/pagar"  # Ejemplo futuro
+            'link_pago': "https://tupagina.com/pagar"
         }
 
-        # 6. Definir Asunto y Cuerpo por defecto
         subject = f"Su Comprobante {comprobante.numero_completo} - {nombre_empresa}"
         body_html = f"""
         <p>Estimado/a <strong>{entidad.razon_social}</strong>:</p>
@@ -457,40 +872,32 @@ def enviar_comprobante_por_email(comprobante, request):
         <p>Atte,<br>{nombre_empresa}</p>
         """
 
-        # 7. Procesar Plantilla Personalizada (Si existe)
         if comprobante.serie and comprobante.serie.diseno_impresion:
             diseno = comprobante.serie.diseno_impresion
 
-            # Asunto (Este sigue usando format simple porque no lleva HTML)
             if diseno.asunto_email:
                 try:
                     subject = diseno.asunto_email.format(**context_data)
-                except:
-                    pass  # Si falla el formato, usa el original sin romper
+                except Exception:
+                    pass
 
-            # Cuerpo HTML (Usamos el Motor de Django)
             if diseno.cuerpo_email:
                 try:
-                    # Esto permite usar CSS { } y variables {{ }} sin conflictos
                     template_email = Template(diseno.cuerpo_email)
                     context_email = Context(context_data)
                     body_html = template_email.render(context_email)
                 except Exception as e:
                     print(f"Error renderizando email: {e}")
-                    # Si falla, usamos el body por defecto, pero no detenemos el envío.
 
-        # 8. Crear Email
         email = EmailMessage(
             subject=subject,
-            body=body_html,  # Aquí va el HTML procesado
+            body=body_html,
             from_email=config_smtp.email_from,
             to=[email_destino],
             connection=connection
         )
 
-        # ¡CLAVE! Avisamos que el contenido es HTML
         email.content_subtype = "html"
-
         email.attach(filename, pdf_content, 'application/pdf')
         email.send()
 
@@ -502,9 +909,6 @@ def enviar_comprobante_por_email(comprobante, request):
 
 @staff_member_required
 def imprimir_comprobante_pdf(request, pk):
-    """
-    Vista original de descarga: ahora solo llama a la función generadora.
-    """
     comprobante = get_object_or_404(ComprobanteVenta, pk=pk)
     pdf_bytes = generar_pdf_bytes(comprobante, request)
 
@@ -517,24 +921,42 @@ def imprimir_comprobante_pdf(request, pk):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def generar_pdf_venta_api(request, pk):
-    # Vista API Legacy
+    """
+    Genera el PDF del comprobante respetando el diseño de impresión
+    configurado en la Serie de Documento (Talonario).
+
+    Si la serie tiene diseno_impresion con contenido_html, usa ese HTML.
+    Si tiene archivo_template, usa ese archivo.
+    Si no tiene diseño configurado, usa el template por defecto.
+    """
     comprobante = get_object_or_404(ComprobanteVenta, pk=pk)
-    config = ConfiguracionEmpresa.objects.first()
 
-    context = {
-        'comprobante': comprobante,
-        'tenant': request.tenant,
-        'config': config,
-        'request': request
-    }
-
-    html_string = render_to_string('ventas/comprobante_pdf.html', context, request=request)
-    pdf_file = weasyprint.HTML(
-        string=html_string,
-        base_url=request.build_absolute_uri()
-    ).write_pdf()
+    try:
+        pdf_file = generar_pdf_bytes(comprobante, request)
+    except Exception as e:
+        return Response(
+            {'error': f'Error generando PDF: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
     response = HttpResponse(pdf_file, content_type='application/pdf')
     filename = f"Comprobante_{comprobante.numero_completo}.pdf"
     response['Content-Disposition'] = f'inline; filename="{filename}"'
     return response
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def enviar_email_comprobante_api(request, pk):
+    """
+    Envía el comprobante por email al cliente.
+    Usa la función enviar_comprobante_por_email() ya existente.
+    POST /api/comprobantes-venta/{pk}/enviar-email/
+    """
+    comprobante = get_object_or_404(ComprobanteVenta, pk=pk)
+    ok, mensaje = enviar_comprobante_por_email(comprobante, request)
+
+    if ok:
+        return Response({'ok': True, 'mensaje': mensaje}, status=status.HTTP_200_OK)
+    else:
+        return Response({'ok': False, 'error': mensaje}, status=status.HTTP_400_BAD_REQUEST)

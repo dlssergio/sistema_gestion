@@ -279,10 +279,43 @@ class AfipManager:
         doc_tipo, doc_nro = 99, 0
         total = get_val(comprobante.total)
 
+        # ── Override para cliente genérico (C00000) ──────────────────────────
+        # Si el comprobante tiene datos de cliente ocasional, los usamos en
+        # lugar de los datos del cliente genérico para la solicitud de CAE.
+        CODIGO_CLIENTE_GENERICO = 'C00000'
+        es_cliente_generico = (
+                comprobante.cliente.codigo_cliente == CODIGO_CLIENTE_GENERICO
+        )
+
+        # CUIT efectivo: override si existe, si no el de la entidad
+        cuit_efectivo = (
+            comprobante.cliente_cuit_override
+            if es_cliente_generico and comprobante.cliente_cuit_override
+            else entidad.cuit
+        )
+
+        # Limpiar guiones del CUIT para conversión a int
+        def _parse_cuit(raw):
+            if not raw:
+                return None
+            cleaned = str(raw).replace('-', '').replace(' ', '')
+            return int(cleaned) if cleaned.isdigit() else None
+
         if comprobante.letra == 'A':
-            doc_tipo, doc_nro = 80, int(entidad.cuit)
-        elif entidad.cuit and total >= 100000:
-            doc_tipo, doc_nro = 80, int(entidad.cuit)
+            # Factura A: SIEMPRE requiere CUIT (DocTipo=80)
+            cuit_int = _parse_cuit(cuit_efectivo)
+            if not cuit_int:
+                raise Exception(
+                    "Factura A requiere CUIT válido del receptor. "
+                    "Ingresá el CUIT del cliente en el campo de datos del cliente."
+                )
+            doc_tipo, doc_nro = 80, cuit_int
+        elif cuit_efectivo and total >= 100000:
+            # Factura B/C: si hay CUIT y el total supera el umbral, informar CUIT
+            cuit_int = _parse_cuit(cuit_efectivo)
+            if cuit_int:
+                doc_tipo, doc_nro = 80, cuit_int
+        # else: doc_tipo=99, doc_nro=0 → Consumidor Final
 
         neto = get_val(comprobante.subtotal)
         iva = round(total - neto, 2)

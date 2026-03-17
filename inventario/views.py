@@ -20,36 +20,26 @@ from .serializers import (
 )
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from .filters import ArticuloSearchFilter
+
 
 class ArticuloViewSet(viewsets.ModelViewSet):
-    queryset = Articulo.objects.all().order_by('cod_articulo')
-    filter_backends = [filters.SearchFilter]
-    search_fields = [
-        'cod_articulo',
-        'descripcion',
-        'ean',
-        'qr',
-        'marca__nombre',  # Busca por el nombre de la marca relacionada
-        'rubro__nombre'  # Busca por el nombre del rubro relacionado
-    ]
+    queryset = Articulo.objects.select_related(
+        'marca', 'rubro', 'categoria_impositiva',
+        'precio_costo_moneda', 'precio_venta_moneda'
+    ).prefetch_related('impuestos').order_by('cod_articulo')
 
-    # 2. AÑADIMOS EL MÉTODO PARA SELECCIONAR EL SERIALIZER
+    # Reemplazamos SearchFilter estándar por nuestro filtro custom
+    filter_backends = [ArticuloSearchFilter]
+
     def get_serializer_class(self):
-        # Si la acción es crear (POST) o actualizar (PUT/PATCH)...
         if self.action in ['create', 'update', 'partial_update']:
-            # ...usamos el serializer de escritura.
             return ArticuloCreateUpdateSerializer
-        # Para cualquier otra acción (list, retrieve)...
-        # ...usamos el serializer de lectura.
         return ArticuloSerializer
 
     @action(detail=False, methods=['get'])
     def choices(self, request):
-        """Devuelve las opciones para los selects del formulario"""
-        return Response({
-            'perfil': Articulo.Perfil.choices,
-            # Agrega aquí otros choices si tuvieras
-        })
+        return Response({'perfil': Articulo.Perfil.choices})
 
 # ... (El resto de los ViewSets de Marca y Rubro no cambian) ...
 class MarcaViewSet(viewsets.ModelViewSet):

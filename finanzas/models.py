@@ -180,11 +180,12 @@ class PlanCuota(models.Model):
     cuotas = models.PositiveIntegerField()
     coeficiente = models.DecimalField(max_digits=6, decimal_places=4, default=1.0000,
                                       help_text="Coeficiente multiplicador (Ej: 1.20 para 20% interés)")
-    tna = models.DecimalField(max_digits=6, decimal_places=2, default=0, verbose_name="TNA %", help_text="Costo financiero implícito")
+    tna = models.DecimalField(max_digits=6, decimal_places=2, default=0, verbose_name="TNA %",
+                              help_text="Costo financiero implícito")
 
     class Meta:
         ordering = ['cuotas']
-        unique_together = ('plan', 'cuotas') # No puede haber dos veces "3 cuotas" en el mismo plan
+        unique_together = ('plan', 'cuotas')  # No puede haber dos veces "3 cuotas" en el mismo plan
 
     def __str__(self): return f"{self.cuotas} cuotas (Coef: {self.coeficiente})"
 
@@ -224,7 +225,8 @@ class LiquidacionTarjeta(models.Model):
     procesada = models.BooleanField(default=False)
     creado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
 
-    def __str__(self): return f"Liq {self.tarjeta} #{self.numero_liquidacion}"
+    def __str__(self):
+        return f"Liq {self.tarjeta} #{self.numero_liquidacion}"
 
     def calcular_totales(self):
         # Sumar gastos manuales
@@ -251,7 +253,7 @@ class LiquidacionTarjeta(models.Model):
             tipo_val_transf, _ = TipoValor.objects.get_or_create(nombre="Transferencia Bancaria")
 
             MovimientoFondo.objects.create(
-                fecha=self.fecha_liquidacion,
+                fecha=self.fecha_liquidacion,  # Esto queda solo fecha (liquidacion bancaria)
                 cuenta=self.cuenta_banco,
                 tipo_movimiento=MovimientoFondo.TipoMov.INGRESO,
                 tipo_valor=tipo_val_transf,
@@ -332,13 +334,17 @@ class CuponTarjeta(models.Model):
     plan = models.ForeignKey(PlanTarjeta, on_delete=models.PROTECT, null=True, blank=True)
 
     monto = models.DecimalField(max_digits=14, decimal_places=2)
-    fecha_operacion = models.DateField(default=timezone.now)
+
+    # CAMBIO APLICADO: DateField -> DateTimeField para coincidir con el ticket físico/POS
+    fecha_operacion = models.DateTimeField(default=timezone.now, verbose_name="Fecha y Hora de Operación")
+
     fecha_acreditacion_estimada = models.DateField(null=True, blank=True)
 
     estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.PENDIENTE)
 
     # Vinculación con la liquidación
-    liquidacion = models.ForeignKey(LiquidacionTarjeta, on_delete=models.SET_NULL, null=True, blank=True, related_name='cupones_asociados')
+    liquidacion = models.ForeignKey(LiquidacionTarjeta, on_delete=models.SET_NULL, null=True, blank=True,
+                                    related_name='cupones_asociados')
 
     def __str__(self):
         return f"{self.tarjeta} Cupon:{self.cupon} (${self.monto})"
@@ -352,14 +358,17 @@ class MovimientoFondo(models.Model):
         EGRESO = 'EG', 'Egreso'
         TRANSFERENCIA = 'TR', 'Transferencia Interna'
 
-    fecha = models.DateField(default=timezone.now)
+    # CAMBIO APLICADO: DateField -> DateTimeField para la trazabilidad exacta de la caja
+    fecha = models.DateTimeField(default=timezone.now, verbose_name="Fecha y Hora")
+
     cuenta = models.ForeignKey(CuentaFondo, on_delete=models.PROTECT, related_name='movimientos')
 
     tipo_movimiento = models.CharField(max_length=2, choices=TipoMov.choices)
     tipo_valor = models.ForeignKey(TipoValor, on_delete=models.PROTECT, null=True, blank=True)
 
     # Vinculación con Cupón (NUEVO)
-    cupon = models.ForeignKey(CuponTarjeta, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="Cupón Tarjeta")
+    cupon = models.ForeignKey(CuponTarjeta, on_delete=models.SET_NULL, null=True, blank=True,
+                              verbose_name="Cupón Tarjeta")
 
     # Montos
     monto_ingreso = models.DecimalField(max_digits=14, decimal_places=2, default=0)
@@ -369,7 +378,8 @@ class MovimientoFondo(models.Model):
     concepto = models.CharField(max_length=200, help_text="Ej: Cobro Factura F-0001, Pago Luz")
 
     # Enterprise Features
-    centro_costo = models.ForeignKey(CentroCosto, on_delete=models.SET_NULL, null=True, blank=True, verbose_name="Centro de Costo")
+    centro_costo = models.ForeignKey(CentroCosto, on_delete=models.SET_NULL, null=True, blank=True,
+                                     verbose_name="Centro de Costo")
     cheque = models.ForeignKey(Cheque, on_delete=models.SET_NULL, null=True, blank=True)
 
     # Conciliación Bancaria
@@ -403,7 +413,8 @@ class TransferenciaInterna(models.Model):
         CONFIRMADO = 'CN', 'Confirmado'
         ANULADO = 'AN', 'Anulado'
 
-    fecha = models.DateField(default=timezone.now)
+    # CAMBIO APLICADO: DateField -> DateTimeField para auditar transferencias internas
+    fecha = models.DateTimeField(default=timezone.now, verbose_name="Fecha y Hora")
 
     # Origen (De donde sale la plata)
     origen = models.ForeignKey(CuentaFondo, on_delete=models.PROTECT, related_name='transferencias_salida',
@@ -565,7 +576,9 @@ class CertificadoRetencion(models.Model):
     Documento que avala que retuvimos dinero al proveedor.
     Se genera automáticamente desde la Orden de Pago.
     """
-    fecha = models.DateField(default=timezone.now)
+    # CAMBIO APLICADO: DateField -> DateTimeField para estar sincronizado con la OP
+    fecha = models.DateTimeField(default=timezone.now, verbose_name="Fecha y Hora")
+
     numero = models.CharField(max_length=50, verbose_name="N° Certificado")
     proveedor = models.ForeignKey('compras.Proveedor', on_delete=models.PROTECT)
     regimen = models.ForeignKey(RegimenRetencion, on_delete=models.PROTECT)

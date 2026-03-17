@@ -17,6 +17,7 @@ urlpatterns = [
 
     # --- NUEVA RUTA PARA PDF ---
     path('comprobantes-venta/<int:pk>/pdf/', views.generar_pdf_venta_api, name='venta_pdf_api'),
+    path('comprobantes-venta/<int:pk>/enviar-email/', views.enviar_email_comprobante_api, name='venta_email_api'),
 
     # El router principal se incluye sin prefijo
     path('', include(router.urls)),
