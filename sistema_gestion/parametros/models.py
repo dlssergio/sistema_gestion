@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
+from django.conf import settings
 
 
 # --- MODELOS DE CONFIGURACIÓN GENERAL ---
@@ -488,3 +489,58 @@ class ConfiguracionSMTP(models.Model):
     class Meta:
         verbose_name = "Configuración de Correo"
         verbose_name_plural = "Configuraciones de Correo"
+
+
+# parametros/models.py
+class CargaMasiva(models.Model):
+    class Estado(models.TextChoices):
+        PENDIENTE = 'PD', 'Pendiente'
+        PROCESANDO = 'PR', 'Procesando'
+        COMPLETADO = 'OK', 'Completado'
+        ERROR = 'ER', 'Error General'
+
+    class Entidad(models.TextChoices):
+        ARTICULOS = 'ARTICULOS', 'Artículos / Inventario'
+        PRECIOS_VENTA = 'PRECIOS_VENTA', 'Listas de Precios (Venta)'
+        PRECIOS_COMPRA = 'PRECIOS_COMPRA', 'Listas de Precios (Compra)'
+        CLIENTES = 'CLIENTES', 'Clientes'
+        PROVEEDORES = 'PROVEEDORES', 'Proveedores'
+
+    class Modo(models.TextChoices):
+        CREAR = 'CREAR', 'Solo Crear Nuevos (Falla si existe)'
+        ACTUALIZAR = 'ACTUALIZAR', 'Solo Actualizar (Falla si no existe)'
+        AMBOS = 'AMBOS', 'Crear y Actualizar (Upsert)'
+
+    archivo = models.FileField(upload_to='cargas_masivas/%Y/%m/', verbose_name="Archivo CSV/Excel")
+    entidad = models.CharField(max_length=50, choices=Entidad.choices, verbose_name="Entidad a Importar")
+    # --- NUEVO CAMPO MODO ---
+    modo = models.CharField(max_length=20, choices=Modo.choices, default=Modo.AMBOS, verbose_name="Modo de Importación")
+
+    estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.PENDIENTE)
+
+    total_filas = models.IntegerField(default=0)
+    filas_procesadas = models.IntegerField(default=0)
+    filas_exitosas = models.IntegerField(default=0)
+    filas_error = models.IntegerField(default=0)
+
+    detalle_errores = models.JSONField(default=list, blank=True)
+
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Carga {self.entidad} - {self.get_estado_display()} ({self.creado_en.strftime('%d/%m/%Y %H:%M')})"
+
+    class Meta:
+        verbose_name = "Carga Masiva"
+        verbose_name_plural = "Cargas Masivas"
+        ordering = ['-creado_en']
+
+    def __str__(self):
+        return f"Carga {self.entidad} - {self.get_estado_display()} ({self.creado_en.strftime('%d/%m/%Y %H:%M')})"
+
+    class Meta:
+        verbose_name = "Carga Masiva"
+        verbose_name_plural = "Cargas Masivas"
+        ordering = ['-creado_en']

@@ -170,7 +170,9 @@ class ComprasStockService:
                 )
             # NOTA: Podrías necesitar un flag específico 'stock_previsto_aplicado' en el modelo
             # si quieres controlar idempotencia solo para la OC, separado del stock real.
-            pass
+            from .models import ComprobanteCompra
+            comprobante.stock_aplicado = True
+            ComprobanteCompra.objects.filter(pk=comprobante.pk).update(stock_aplicado=True)
 
     @staticmethod
     @transaction.atomic

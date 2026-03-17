@@ -42,6 +42,7 @@ SHARED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'django.contrib.humanize',
+    'django_extensions',
 
     # Apps de terceros que son compartidas
     'rest_framework',

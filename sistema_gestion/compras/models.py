@@ -13,7 +13,6 @@ from django.conf import settings
 from entidades.models import Entidad
 from parametros.models import Contador, TipoComprobante, Role, Moneda, UnidadMedida, get_default_unidad_medida
 from inventario.services import StockService
-# Importamos modelos de finanzas incluyendo los de Impuestos
 from finanzas.models import (
     TipoValor, CuentaFondo, Cheque, MovimientoFondo, Banco,
     RegimenRetencion, CertificadoRetencion
@@ -35,12 +34,43 @@ def get_default_moneda_pk():
 # --- PROVEEDOR ---
 class Proveedor(models.Model):
     entidad = models.OneToOneField(Entidad, on_delete=models.CASCADE, primary_key=True)
-    codigo_proveedor = models.CharField(max_length=50, unique=True, blank=True, null=True, verbose_name="Código")
-    nombre_fantasia = models.CharField(max_length=255, blank=True, null=True, verbose_name="Nombre de Fantasía")
-    limite_credito = models.DecimalField(max_digits=12, decimal_places=2, default=0, verbose_name="Límite Crédito")
-    roles = models.ManyToManyField(Role, blank=True, help_text="Roles que pueden gestionar este proveedor.")
 
-    # --- NUEVOS CAMPOS IMPOSITIVOS ---
+    # ── Identificación ─────────────────────────────────────────────
+    codigo_proveedor = models.CharField(
+        max_length=50, unique=True, blank=True, null=True,
+        verbose_name="Código de Proveedor"
+    )
+    nombre_fantasia = models.CharField(
+        max_length=255, blank=True, null=True,
+        verbose_name="Nombre de Fantasía"
+    )
+
+    # ── Crédito / Comercial ────────────────────────────────────────
+    limite_credito = models.DecimalField(
+        max_digits=12, decimal_places=2, default=0,
+        verbose_name="Límite Crédito"
+    )
+    plazo_pago_dias = models.PositiveIntegerField(
+        default=0,
+        verbose_name="Plazo de Pago (días)",
+        help_text="Ej: 30 = pago a 30 días de la factura."
+    )
+    descuento_compra = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0,
+        verbose_name="Descuento de Compra (%)",
+        help_text="Descuento habitual que otorga este proveedor."
+    )
+    moneda_compra = models.ForeignKey(
+        'parametros.Moneda',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='proveedores_moneda_compra',
+        verbose_name="Moneda de Compra Default",
+        help_text="USD para importaciones, ARS para locales."
+    )
+
+    # ── Impositivo ─────────────────────────────────────────────────
+    roles = models.ManyToManyField(Role, blank=True, help_text="Roles que pueden gestionar este proveedor.")
     situacion_iibb = models.CharField(max_length=30, blank=True, verbose_name="Situación IIBB (Convenio/Local)")
     nro_iibb = models.CharField(max_length=30, blank=True, verbose_name="N° IIBB")
 
@@ -61,6 +91,40 @@ class Proveedor(models.Model):
         verbose_name="Régimen IIBB (Default)"
     )
 
+    # ── Datos bancarios (para órdenes de pago) ────────────────────
+    banco_nombre = models.CharField(max_length=100, blank=True, null=True, verbose_name="Banco")
+    banco_cbu = models.CharField(max_length=22, blank=True, null=True, verbose_name="CBU")
+    banco_alias = models.CharField(max_length=50, blank=True, null=True, verbose_name="Alias CBU")
+    banco_cuenta_nro = models.CharField(max_length=50, blank=True, null=True, verbose_name="N° de Cuenta")
+    banco_tipo_cuenta = models.CharField(
+        max_length=20, blank=True, null=True,
+        verbose_name="Tipo de Cuenta",
+        help_text="Ej: Cta Cte, Caja de Ahorros"
+    )
+
+    # ── Contacto comercial ─────────────────────────────────────────
+    contacto_nombre = models.CharField(
+        max_length=150, blank=True, null=True,
+        verbose_name="Nombre del Contacto Comercial"
+    )
+    contacto_email = models.EmailField(
+        blank=True, null=True,
+        verbose_name="Email Comercial"
+    )
+    contacto_telefono = models.CharField(
+        max_length=50, blank=True, null=True,
+        verbose_name="Teléfono Comercial"
+    )
+
+    # ── Auditoría ──────────────────────────────────────────────────
+    fecha_alta = models.DateField(
+        null=True, blank=True,
+        verbose_name="Fecha de Alta",
+        help_text="Fecha en que se dio de alta el proveedor."
+    )
+    esta_activo = models.BooleanField(default=True, verbose_name="¿Está Activo?")
+    observaciones = models.TextField(blank=True, null=True, verbose_name="Observaciones")
+
     def __str__(self):
         return self.entidad.razon_social
 
@@ -68,8 +132,10 @@ class Proveedor(models.Model):
         if not self.codigo_proveedor:
             try:
                 with transaction.atomic():
-                    contador, _ = Contador.objects.get_or_create(nombre='codigo_proveedor',
-                                                                 defaults={'prefijo': 'P', 'ultimo_valor': 0})
+                    contador, _ = Contador.objects.get_or_create(
+                        nombre='codigo_proveedor',
+                        defaults={'prefijo': 'P', 'ultimo_valor': 0}
+                    )
                     contador.ultimo_valor += 1
                     self.codigo_proveedor = f"{contador.prefijo}{str(contador.ultimo_valor).zfill(5)}"
                     contador.save()
@@ -103,7 +169,9 @@ class ComprobanteCompra(models.Model):
     letra = models.CharField(max_length=1, editable=False)
     punto_venta = models.PositiveIntegerField(default=1, verbose_name="Punto de Venta")
     numero = models.PositiveIntegerField(verbose_name="Número")
-    fecha = models.DateField(verbose_name="Fecha del Comprobante", default=timezone.now)
+
+    fecha = models.DateTimeField(verbose_name="Fecha y Hora del Comprobante", default=timezone.now)
+
     estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.BORRADOR, verbose_name="Estado")
     condicion_compra = models.CharField(max_length=2, choices=CondicionCompra.choices, default=CondicionCompra.CTA_CTE,
                                         verbose_name="Condición")
@@ -136,7 +204,6 @@ class ComprobanteCompra(models.Model):
         if self.tipo_comprobante:
             self.letra = self.tipo_comprobante.letra
 
-        # Depósito por defecto si está vacío
         if not self.deposito_id and self.deposito is None:
             from inventario.models import Deposito
             deposito_principal = Deposito.objects.filter(es_principal=True).first()
@@ -167,13 +234,15 @@ class ComprobanteCompraItem(models.Model):
     datos_costo_efectivo = models.JSONField(default=dict, editable=False)
 
     @property
-    def precio_costo_unitario(self): return Money(self.precio_costo_unitario_monto,
-                                                  self.precio_costo_unitario_moneda.simbolo)
+    def precio_costo_unitario(self):
+        return Money(self.precio_costo_unitario_monto, self.precio_costo_unitario_moneda.simbolo)
 
     @property
-    def subtotal(self): return (self.cantidad or Decimal(0)) * self.precio_costo_unitario
+    def subtotal(self):
+        return (self.cantidad or Decimal(0)) * self.precio_costo_unitario
 
-    def __str__(self): return f"{self.cantidad} x {self.articulo.descripcion}"
+    def __str__(self):
+        return f"{self.cantidad} x {self.articulo.descripcion}"
 
 
 # --- LISTAS DE PRECIOS ---
@@ -190,8 +259,8 @@ class ListaPreciosProveedor(models.Model):
     observaciones = models.TextField(blank=True, verbose_name="Observaciones")
 
     def clean(self):
-        if self.vigente_hasta and self.vigente_desde > self.vigente_hasta: raise ValidationError(
-            "La fecha de fin debe ser posterior a la fecha de inicio")
+        if self.vigente_hasta and self.vigente_desde > self.vigente_hasta:
+            raise ValidationError("La fecha de fin debe ser posterior a la fecha de inicio")
         if self.es_principal:
             if ListaPreciosProveedor.objects.filter(proveedor=self.proveedor, es_principal=True).exclude(
                     pk=self.pk).exists():
@@ -227,17 +296,21 @@ class ItemListaPreciosProveedor(models.Model):
     codigo_articulo_proveedor = models.CharField(max_length=50, blank=True)
 
     @property
-    def precio_lista(self): return Money(self.precio_lista_monto, self.precio_lista_moneda.simbolo)
+    def precio_lista(self):
+        return Money(self.precio_lista_monto, self.precio_lista_moneda.simbolo)
 
     @property
     def costo_efectivo(self):
         from compras.services import CostCalculatorService
         return CostCalculatorService.calculate_effective_cost(self)
 
-    def __str__(self): return f"{self.articulo.descripcion}"
+    def __str__(self):
+        return f"{self.articulo.descripcion}"
 
-    class Meta: verbose_name = "2. Ítem de Lista"; verbose_name_plural = "2. Ítems de Listas"; unique_together = [
-        'lista_precios', 'articulo', 'cantidad_minima']
+    class Meta:
+        verbose_name = "2. Ítem de Lista"
+        verbose_name_plural = "2. Ítems de Listas"
+        unique_together = ['lista_precios', 'articulo', 'cantidad_minima']
 
 
 class HistorialPrecioProveedor(models.Model):
@@ -267,7 +340,7 @@ class OrdenPago(models.Model):
                               verbose_name="Serie (Opcional)")
     numero = models.PositiveIntegerField(verbose_name="Número", blank=True, null=True)
     proveedor = models.ForeignKey(Proveedor, on_delete=models.PROTECT)
-    fecha = models.DateField(default=timezone.now)
+    fecha = models.DateTimeField(default=timezone.now)
     estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.BORRADOR)
     monto_total = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False)
     observaciones = models.TextField(blank=True)
@@ -288,36 +361,32 @@ class OrdenPago(models.Model):
     def __str__(self):
         return f"OP #{self.numero or '?'} - {self.proveedor}"
 
-    # MÉTODO 1: APLICAR
     def aplicar_finanzas(self):
         """
         Ejecuta el impacto financiero:
         - Baja deuda de facturas.
         - Genera movimientos de caja/banco.
         - Emite cheques.
-        - Genera Certificados de Retención (NUEVO).
+        - Genera Certificados de Retención.
         """
-        if self.estado != self.Estado.CONFIRMADO or self.finanzas_aplicadas: return
-        if not self.valores.exists(): return
+        if self.estado != self.Estado.CONFIRMADO or self.finanzas_aplicadas:
+            return
+        if not self.valores.exists():
+            return
 
         from finanzas.services import CalculadoraFiscalService
+        from django.db.models import F
 
         with transaction.atomic():
-            # -------------------------------------------------------
-            # 1. NUEVO: Generación Automática de Retenciones
-            # -------------------------------------------------------
-            # Calculamos la base imponible (Total de lo que estamos pagando)
+            # ── 1. Generación Automática de Retenciones ──────────────
             total_pagado = sum(v.monto for v in self.valores.all())
 
-            # Llamamos al servicio
             monto_ret, regimen = CalculadoraFiscalService.calcular_retencion_ganancias(
                 self.proveedor, total_pagado
             )
 
             if monto_ret > 0:
-                # Generamos el número de certificado (simulado con timestamp o contador)
                 nro_cert = f"RET-{self.pk}-{int(timezone.now().timestamp())}"
-
                 CertificadoRetencion.objects.create(
                     fecha=self.fecha,
                     numero=nro_cert,
@@ -327,21 +396,15 @@ class OrdenPago(models.Model):
                     base_calculo=total_pagado,
                     importe_retenido=monto_ret
                 )
-                # Opcional: Podríamos agregar un aviso en observaciones
                 self.observaciones += f" [Se retuvo Ganancias: ${monto_ret:.2f}]"
                 self.save()
 
-            # -------------------------------------------------------
-            # 2. (LÓGICA ORIGINAL) Salida Dinero
-            # -------------------------------------------------------
+            # ── 2. Salida de Dinero ───────────────────────────────────
             for valor in self.valores.all():
                 cheque_implicado = None
 
-                # 1. Cheque Propio (Emisión)
                 if valor.tipo.es_cheque and valor.cheque_propio_nro:
-                    # Detectamos si es E-Cheq por el flag
                     tipo_cheque_db = 'ECH' if valor.es_echeq else 'FIS'
-
                     cheque_implicado = Cheque.objects.create(
                         numero=valor.cheque_propio_nro,
                         banco=valor.origen.banco,
@@ -355,15 +418,12 @@ class OrdenPago(models.Model):
                         nombre_librador="EMISIÓN PROPIA",
                         observaciones=f"Emitido en OP #{self.numero} para {self.proveedor}"
                     )
-
-                # 2. Cheque Tercero (Endoso)
                 elif valor.cheque_tercero:
                     cheque_implicado = valor.cheque_tercero
                     cheque_implicado.estado = Cheque.Estado.ENTREGADO
                     cheque_implicado.observaciones += f" | Endosado a {self.proveedor}"
                     cheque_implicado.save()
 
-                # Registro de Movimiento en Cuenta (Caja/Banco)
                 MovimientoFondo.objects.create(
                     fecha=self.fecha,
                     cuenta=valor.origen,
@@ -375,54 +435,52 @@ class OrdenPago(models.Model):
                     cheque=cheque_implicado
                 )
 
-                # Descuento del saldo
-                valor.origen.saldo_monto -= valor.monto
-                valor.origen.save()
+                # ✅ Usar F() para evitar race conditions
+                CuentaFondo.objects.filter(pk=valor.origen.pk).update(
+                    saldo_monto=F('saldo_monto') - valor.monto
+                )
 
-            # -------------------------------------------------------
-            # 3. (LÓGICA ORIGINAL) Bajar Deuda
-            # -------------------------------------------------------
+            # ── 3. Bajar Deuda ────────────────────────────────────────
             for imputacion in self.imputaciones.all():
                 comp = imputacion.comprobante
                 comp.saldo_pendiente -= imputacion.monto_imputado
-                if comp.saldo_pendiente < 0: comp.saldo_pendiente = 0
+                if comp.saldo_pendiente < 0:
+                    comp.saldo_pendiente = 0
                 comp.save()
 
             self.finanzas_aplicadas = True
             self.save(update_fields=['finanzas_aplicadas', 'observaciones'])
 
-    # MÉTODO 2: REVERTIR (Fix para eliminar)
     def revertir_finanzas(self):
         """Reversión sin chequeo de estado ANULADO, para soportar borrado físico."""
-        if not self.finanzas_aplicadas: return
+        if not self.finanzas_aplicadas:
+            return
 
-        # Borrar certificados generados automáticamente
         self.certificados_emitidos.all().delete()
 
-        # Carga ansiosa para pre_delete
         imputaciones = list(self.imputaciones.all())
         valores = list(self.valores.all())
 
+        from django.db.models import F
+
         with transaction.atomic():
-            # 1. Devolver Deuda
             for imputacion in imputaciones:
                 comp = imputacion.comprobante
                 comp.saldo_pendiente += imputacion.monto_imputado
                 comp.save()
 
-            # 2. Devolver Dinero
             for valor in valores:
-                valor.origen.saldo_monto += valor.monto
-                valor.origen.save()
+                # ✅ Usar F() para evitar race conditions
+                CuentaFondo.objects.filter(pk=valor.origen.pk).update(
+                    saldo_monto=F('saldo_monto') + valor.monto
+                )
 
-                # Anular cheque propio
                 if valor.tipo.es_cheque and valor.cheque_propio_nro:
                     Cheque.objects.filter(
                         numero=valor.cheque_propio_nro,
                         origen=Cheque.Origen.PROPIO
                     ).update(estado=Cheque.Estado.ANULADO)
 
-                # Devolver cheque tercero a Cartera
                 if valor.cheque_tercero:
                     valor.cheque_tercero.estado = Cheque.Estado.EN_CARTERA
                     valor.cheque_tercero.save()
@@ -440,7 +498,8 @@ class OrdenPagoImputacion(models.Model):
     comprobante = models.ForeignKey(ComprobanteCompra, on_delete=models.PROTECT, verbose_name="Factura a Pagar")
     monto_imputado = models.DecimalField(max_digits=14, decimal_places=2)
 
-    def __str__(self): return f"Pago a {self.comprobante}"
+    def __str__(self):
+        return f"Pago a {self.comprobante}"
 
 
 class OrdenPagoValor(models.Model):
@@ -449,19 +508,18 @@ class OrdenPagoValor(models.Model):
     monto = models.DecimalField(max_digits=14, decimal_places=2)
     origen = models.ForeignKey(CuentaFondo, on_delete=models.PROTECT, verbose_name="Caja/Cuenta Origen")
 
-    # Cheque Propio
     cheque_propio_nro = models.CharField(max_length=50, blank=True, verbose_name="N° Cheque Propio")
     es_echeq = models.BooleanField(default=False, verbose_name="¿Es E-Cheq?",
                                    help_text="Marcar si es cheque electrónico")
     fecha_pago_cheque = models.DateField(null=True, blank=True)
 
-    # Cheque Tercero
     cheque_tercero = models.ForeignKey(Cheque, on_delete=models.SET_NULL, null=True, blank=True,
                                        limit_choices_to={'estado': 'CA'})
 
     referencia = models.CharField(max_length=100, blank=True, verbose_name="Ref/Transf")
 
-    def __str__(self): return f"{self.tipo} ${self.monto}"
+    def __str__(self):
+        return f"{self.tipo} ${self.monto}"
 
 
 # --- SIGNALS ---
@@ -490,7 +548,8 @@ def actualizar_costo_articulo_signal(sender, instance, created, **kwargs):
     prov_auth = articulo.proveedor_actualiza_precio
     if prov_auth and prov_lista and prov_auth.pk == prov_lista.pk:
         costo_nuevo = instance.costo_efectivo
-        if not costo_nuevo or costo_nuevo.amount == 0: costo_nuevo = instance.precio_lista
+        if not costo_nuevo or costo_nuevo.amount == 0:
+            costo_nuevo = instance.precio_lista
         monto_new = costo_nuevo.amount
         mon_new = costo_nuevo.currency.code
         mon_curr = articulo.precio_costo_moneda.simbolo if articulo.precio_costo_moneda else 'ARS'
@@ -498,12 +557,14 @@ def actualizar_costo_articulo_signal(sender, instance, created, **kwargs):
             articulo.precio_costo_monto = monto_new
             try:
                 mon_obj = Moneda.objects.filter(simbolo=mon_new).first()
-                if mon_obj: articulo.precio_costo_moneda = mon_obj
+                if mon_obj:
+                    articulo.precio_costo_moneda = mon_obj
             except Exception:
                 pass
             articulo.save()
 
 
+'''
 @receiver(post_save, sender=ComprobanteCompra)
 def aplicar_stock_compra(sender, instance, **kwargs):
     """
@@ -512,27 +573,17 @@ def aplicar_stock_compra(sender, instance, **kwargs):
     y delega al Service.
     """
     if instance.estado == ComprobanteCompra.Estado.CONFIRMADO and not instance.stock_aplicado:
-        # 1. Determinar si mueve stock
         tipo = instance.tipo_comprobante
-
-        # Si el interruptor general 'mueve_stock' está apagado, no hacemos nada.
         if not tipo.mueve_stock:
             return
-
-        # 2. Determinar el TIPO de movimiento (Físico vs Previsto)
-        # Usamos los campos que YA TIENES en parametros.models.py
         mueve_fisico = tipo.afecta_stock_fisico
-
-        # 3. Delegar
         if not mueve_fisico:
-            # Es una Orden de Compra (Solo impacta previsión/administrativo)
             ComprasStockService.confirmar_orden_compra(instance)
         else:
-            # Es un Remito o Factura (Mueve stock REAL)
             ComprasStockService.procesar_recepcion_mercaderia(instance)
+'''
 
 
-# SIGNALS ORDEN PAGO
 @receiver(post_save, sender=OrdenPago)
 def trigger_finanzas_orden_pago(sender, instance, **kwargs):
     if instance.estado == OrdenPago.Estado.ANULADO:

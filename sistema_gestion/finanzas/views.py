@@ -9,9 +9,11 @@ from django.shortcuts import render
 from django.db.models import Sum
 from django.utils import timezone
 from datetime import timedelta
-from .models import Cheque
+from .models import Cheque, TipoValor, CuentaFondo, Banco, PlanCuota
 import csv
 from django.http import HttpResponse
+from rest_framework import viewsets
+from .serializers import TipoValorSerializer, CuentaFondoSerializer, BancoSerializer, PlanCuotaSerializer
 
 
 @api_view(['GET'])
@@ -172,3 +174,42 @@ def exportar_libro_iva_view(request):
     writer.writerow(row_total)
 
     return response
+
+
+class TipoValorViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = TipoValor.objects.all().order_by('nombre')
+    serializer_class = TipoValorSerializer
+    permission_classes = [IsAuthenticated]
+
+class CuentaFondoViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = CuentaFondoSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = CuentaFondo.objects.all().order_by('nombre')
+        activa = self.request.query_params.get('activa')
+        if activa in ('1', 'true', 'True'):
+            qs = qs.filter(activa=True)
+        tipo = self.request.query_params.get('tipo')
+        if tipo:
+            qs = qs.filter(tipo=tipo)
+        return qs
+
+class BancoViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Banco.objects.all().order_by('nombre')
+    serializer_class = BancoSerializer
+    permission_classes = [IsAuthenticated]
+
+class PlanCuotaViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = PlanCuotaSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = PlanCuota.objects.select_related('plan', 'plan__tarjeta').all().order_by('plan__tarjeta__nombre', 'plan__nombre', 'cuotas')
+        plan_id = self.request.query_params.get('plan')
+        if plan_id:
+            qs = qs.filter(plan_id=plan_id)
+        tarjeta_id = self.request.query_params.get('tarjeta')
+        if tarjeta_id:
+            qs = qs.filter(plan__tarjeta_id=tarjeta_id)
+        return qs

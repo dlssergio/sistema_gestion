@@ -5,9 +5,9 @@ from .models import (
     TipoComprobante, Contador, Moneda, Pais, Provincia, Localidad,
     CategoriaImpositiva, Impuesto, Role, GrupoUnidadMedida, UnidadMedida,
     SerieDocumento, ConfiguracionEmpresa, AfipCertificado, AfipToken,
-    ConfiguracionSMTP
+    ConfiguracionSMTP, CargaMasiva
 )
-
+from django.db import transaction
 
 # --- MODELOS GENERALES ---
 
@@ -192,3 +192,32 @@ class ConfiguracionSMTPAdmin(admin.ModelAdmin):
             'fields': ('usar_tls', 'usar_ssl')
         }),
     )
+
+
+@admin.register(CargaMasiva)
+class CargaMasivaAdmin(admin.ModelAdmin):
+    list_display = ('id', 'entidad', 'estado', 'progreso', 'usuario', 'creado_en')
+    list_filter = ('estado', 'entidad', 'creado_en')
+    readonly_fields = (
+    'estado', 'total_filas', 'filas_procesadas', 'filas_exitosas', 'filas_error', 'detalle_errores', 'usuario')
+
+    def progreso(self, obj):
+        if obj.total_filas == 0:
+            return "0%"
+        porcentaje = int((obj.filas_procesadas / obj.total_filas) * 100)
+        return f"{porcentaje}% ({obj.filas_procesadas}/{obj.total_filas})"
+
+    progreso.short_description = "Progreso"
+
+    def save_model(self, request, obj, form, change):
+        if not obj.usuario_id:
+            obj.usuario = request.user
+
+        super().save_model(request, obj, form, change)
+
+        if not change:
+            from .tasks import procesar_carga_masiva_task
+            schema_name = request.tenant.schema_name  # <--- Capturamos el esquema actual
+            transaction.on_commit(
+                lambda: procesar_carga_masiva_task.delay(obj.id, schema_name)  # <--- Lo pasamos
+            )

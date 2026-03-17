@@ -13,6 +13,7 @@ from djmoney.forms.widgets import MoneyWidget
 from djmoney.money import Money
 from djmoney.forms.fields import MoneyField
 from decimal import Decimal
+from .services import ComprasStockService
 
 from .models import (
     Proveedor, ComprobanteCompra, ComprobanteCompraItem,
@@ -323,6 +324,22 @@ class ComprobanteCompraAdmin(admin.ModelAdmin):
         obj.total = total_money.amount
         obj.saldo_pendiente = obj.total
         obj.save()
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        obj = form.instance
+
+        # --- APLICAR STOCK AQUÍ (Después de que cabecera e ítems se guardaron) ---
+        if obj.estado == ComprobanteCompra.Estado.CONFIRMADO and not obj.stock_aplicado:
+            if obj.tipo_comprobante and obj.tipo_comprobante.mueve_stock:
+                try:
+                    if not obj.tipo_comprobante.afecta_stock_fisico:
+                        ComprasStockService.confirmar_orden_compra(obj)
+                    else:
+                        ComprasStockService.procesar_recepcion_mercaderia(obj)
+                    self.message_user(request, "📦 Stock de la compra procesado correctamente.", level=messages.SUCCESS)
+                except Exception as e:
+                    self.message_user(request, f"❌ Error al procesar el stock: {e}", level=messages.ERROR)
 
 
 class ItemListaPreciosProveedorInline(admin.TabularInline):
