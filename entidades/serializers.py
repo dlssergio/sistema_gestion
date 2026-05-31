@@ -1,5 +1,3 @@
-# en entidades/serializers.py (CORREGIDO OTRA VEZ)
-
 from rest_framework import serializers
 from .models import Entidad, SituacionIVA
 from ventas.models import Cliente
@@ -9,7 +7,8 @@ from compras.models import Proveedor
 class SituacionIVASerializer(serializers.ModelSerializer):
     class Meta:
         model = SituacionIVA
-        fields = ['id', 'nombre']
+        fields = ['id', 'codigo', 'nombre', 'codigo_afip', 'mostrar_precio_con_iva']
+
 
 class EntidadSerializer(serializers.ModelSerializer):
     situacion_iva = SituacionIVASerializer(read_only=True)
@@ -20,30 +19,29 @@ class EntidadSerializer(serializers.ModelSerializer):
             'id',
             'razon_social',
             'cuit',
-            'situacion_iva'
+            'dni',
+            'sexo',
+            'email',
+            'situacion_iva',
         ]
 
 
 class ClienteSerializer(serializers.ModelSerializer):
     entidad = EntidadSerializer(read_only=True)
     id = serializers.ReadOnlyField(source='pk')
-
-    # saldo de cuenta corriente — calculado como suma de saldos pendientes
     saldo = serializers.SerializerMethodField()
 
     def get_saldo(self, obj):
-        """
-        Suma de saldo_pendiente de comprobantes CONFIRMADOS del cliente.
-        Devuelve float (no Decimal) para que el frontend lo reciba sin problemas.
-        """
         try:
             from django.db.models import Sum
             from ventas.models import ComprobanteVenta
+
             result = ComprobanteVenta.objects.filter(
                 cliente=obj,
                 estado=ComprobanteVenta.Estado.CONFIRMADO,
                 condicion_venta=ComprobanteVenta.CondicionVenta.CTA_CTE,
             ).aggregate(total=Sum('saldo_pendiente'))
+
             return float(result['total'] or 0)
         except Exception:
             return 0.0
@@ -55,13 +53,20 @@ class ClienteSerializer(serializers.ModelSerializer):
             'entidad',
             'permite_cta_cte',
             'codigo_cliente',
-            # Enterprise fields:
+            'nombre_fantasia',
+            'categoria',
+            'zona',
             'limite_credito',
             'descuento_base',
             'dias_vencimiento',
+            'contacto_nombre',
             'contacto_email',
-            'saldo',  # SerializerMethodField — calculado
+            'contacto_telefono',
+            'esta_activo',
+            'observaciones',
+            'saldo',
         ]
+
 
 class ProveedorSerializer(serializers.ModelSerializer):
     entidad = EntidadSerializer(read_only=True)
@@ -73,5 +78,5 @@ class ProveedorSerializer(serializers.ModelSerializer):
             'id',
             'entidad',
             'codigo_proveedor',
-            'nombre_fantasia'
+            'nombre_fantasia',
         ]

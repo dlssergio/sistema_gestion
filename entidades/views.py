@@ -2,10 +2,12 @@
 
 from rest_framework import viewsets
 from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.permissions import IsAuthenticated
 
 from ventas.models import Cliente
 from compras.models import Proveedor
-from .serializers import ClienteSerializer, ProveedorSerializer
+from .models import SituacionIVA
+from .serializers import ClienteSerializer, ProveedorSerializer, SituacionIVASerializer
 
 from guardian.shortcuts import get_objects_for_user
 
@@ -53,3 +55,9 @@ class ProveedorViewSet(viewsets.ReadOnlyModelViewSet):
         # para los cuales el usuario actual tiene el permiso de 'view_proveedor'.
         # El formato es siempre 'app_label.view_modelname'.
         return get_objects_for_user(user, 'compras.view_proveedor').order_by('entidad__razon_social')
+
+class SituacionIVAViewSet(viewsets.ReadOnlyModelViewSet):
+    """GET /api/entidades/situaciones-iva/ — lista para selects"""
+    queryset = SituacionIVA.objects.all().order_by('nombre')
+    serializer_class = SituacionIVASerializer
+    permission_classes = [IsAuthenticated]

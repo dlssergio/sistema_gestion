@@ -7,7 +7,8 @@ from .models import (
     Impuesto,
     CategoriaImpositiva,
     ConfiguracionEmpresa,
-    CargaMasiva
+    CargaMasiva,
+    ReglaConversionComprobante
 )
 from entidades.serializers import EntidadSerializer
 
@@ -77,3 +78,18 @@ class CargaMasivaSerializer(serializers.ModelSerializer):
         if obj.total_filas == 0:
             return 0
         return int((obj.filas_procesadas / obj.total_filas) * 100)
+
+
+class ReglaConversionSerializer(serializers.ModelSerializer):
+    tipo_origen_nombre  = serializers.CharField(source='tipo_origen.nombre',  read_only=True)
+    tipo_destino_nombre = serializers.CharField(source='tipo_destino.nombre', read_only=True)
+
+    class Meta:
+        model  = ReglaConversionComprobante
+        fields = [
+            'id', 'tipo_origen', 'tipo_origen_nombre',
+            'tipo_destino', 'tipo_destino_nombre',
+            'etiqueta', 'copia_items', 'copia_cliente',
+            'copia_condicion_venta', 'activo', 'orden',
+            'confirmar_automaticamente',
+        ]

@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  # Servicio de almacenamiento de objetos (S3 compatible)
+  minio:
+    image: minio/minio:latest
+    container_name: erp_minio
+    ports:
+      - "9000:9000" # Puerto para la API (Django se conecta aquí)
+      - "9001:9001" # Puerto para la Consola Web (Tú entras por aquí)
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadminpassword
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+
+# Definimos el volumen para que los datos persistan si apagas la PC
+volumes:
+  minio_data:
+    name: proyectos_minio_data

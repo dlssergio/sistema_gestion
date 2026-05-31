@@ -48,7 +48,7 @@ class ComprobanteVentaItemCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ComprobanteVentaItem
-        fields = ['articulo', 'cantidad', 'precio_unitario_original']
+        fields = ['articulo', 'cantidad', 'precio_unitario_original', 'descuento_pct']
 
 
 class ComprobanteVentaCreateSerializer(serializers.ModelSerializer):
@@ -71,6 +71,8 @@ class ComprobanteVentaCreateSerializer(serializers.ModelSerializer):
             'estado',
             'punto_venta',
             'numero',
+            'condicion_venta',
+            'descuento_global_pct',
             'items',
             'observaciones',
             'cliente_nombre_override',
@@ -114,18 +116,26 @@ class ComprobanteVentaCreateSerializer(serializers.ModelSerializer):
 
                     subtotal_acumulado += _to_decimal(getattr(item_obj, "subtotal", 0))
 
-                # 3) Recalcular impuestos / total (con items ya guardados)
-                desglose_impuestos = TaxCalculatorService.calcular_impuestos_comprobante(instance, 'venta')
-                total_impuestos = sum((_to_decimal(v) for v in desglose_impuestos.values()), Decimal("0"))
-                total_nuevo = subtotal_acumulado + total_impuestos
+                    # 3) Recalcular impuestos / total (con items ya guardados)
+                    desglose_impuestos = TaxCalculatorService.calcular_impuestos_comprobante(instance, 'venta')
+                    total_impuestos = sum((_to_decimal(v) for v in desglose_impuestos.values()), Decimal("0"))
 
-                # ✅ CLAVE: usar la regla del modelo para NO pisar pagos en CN
-                instance.recalcular_totales_y_saldo(
-                    nuevo_subtotal=subtotal_acumulado,
-                    nuevos_impuestos=desglose_impuestos,
-                    nuevo_total=total_nuevo,
-                )
-                instance.save()
+                    # Aplicar descuento global si está configurado
+                    desc_pct = Decimal(str(getattr(instance, 'descuento_global_pct', 0) or 0))
+                    if desc_pct > 0:
+                        factor = Decimal("1") - (desc_pct / Decimal("100"))
+                        subtotal_acumulado = (subtotal_acumulado * factor).quantize(Decimal("0.01"))
+                        total_impuestos = (total_impuestos * factor).quantize(Decimal("0.01"))
+
+                    total_nuevo = subtotal_acumulado + total_impuestos
+
+                    # ✅ CLAVE: usar la regla del modelo para NO pisar pagos en CN
+                    instance.recalcular_totales_y_saldo(
+                        nuevo_subtotal=subtotal_acumulado,
+                        nuevos_impuestos=desglose_impuestos,
+                        nuevo_total=total_nuevo,
+                    )
+                    instance.save()
 
         return instance
 

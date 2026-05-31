@@ -543,16 +543,42 @@ def crear_historial_precio(sender, instance, **kwargs):
 
 @receiver(post_save, sender=ItemListaPreciosProveedor)
 def actualizar_costo_articulo_signal(sender, instance, created, **kwargs):
-    articulo = instance.articulo
-    prov_lista = instance.lista_precios.proveedor
+    from inventario.models import ProveedorArticulo
+
+    articulo  = instance.articulo
+    proveedor = instance.lista_precios.proveedor
+
+    # ── 1. Asociar proveedor → artículo si no existe la relación ──────────
+    # Mismo comportamiento que al asociar desde la ficha del artículo.
+    # get_or_create garantiza idempotencia: no falla si ya estaba asociado.
+    pa, creada = ProveedorArticulo.objects.get_or_create(
+        proveedor=proveedor,
+        articulo=articulo,
+        defaults={
+            # Si el artículo aún no tiene fuente de verdad, este proveedor
+            # pasa a serlo automáticamente.
+            'es_fuente_de_verdad': not articulo.proveedorarticulo_set.filter(
+                es_fuente_de_verdad=True
+            ).exists(),
+            # Usar el código de proveedor del ítem si está disponible
+            'cod_articulo_proveedor': instance.codigo_articulo_proveedor or None,
+        }
+    )
+
+    # Si ya existía pero el ítem tiene un código de proveedor nuevo, actualizarlo
+    if not creada and instance.codigo_articulo_proveedor and not pa.cod_articulo_proveedor:
+        pa.cod_articulo_proveedor = instance.codigo_articulo_proveedor
+        pa.save(update_fields=['cod_articulo_proveedor'])
+
+    # ── 2. Actualizar precio_costo del artículo si este proveedor es la fuente ──
     prov_auth = articulo.proveedor_actualiza_precio
-    if prov_auth and prov_lista and prov_auth.pk == prov_lista.pk:
+    if prov_auth and proveedor and prov_auth.pk == proveedor.pk:
         costo_nuevo = instance.costo_efectivo
         if not costo_nuevo or costo_nuevo.amount == 0:
             costo_nuevo = instance.precio_lista
         monto_new = costo_nuevo.amount
-        mon_new = costo_nuevo.currency.code
-        mon_curr = articulo.precio_costo_moneda.simbolo if articulo.precio_costo_moneda else 'ARS'
+        mon_new   = costo_nuevo.currency.code
+        mon_curr  = articulo.precio_costo_moneda.simbolo if articulo.precio_costo_moneda else 'ARS'
         if (articulo.precio_costo_monto != monto_new) or (mon_curr != mon_new):
             articulo.precio_costo_monto = monto_new
             try:

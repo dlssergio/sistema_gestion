@@ -544,3 +544,65 @@ class CargaMasiva(models.Model):
         verbose_name = "Carga Masiva"
         verbose_name_plural = "Cargas Masivas"
         ordering = ['-creado_en']
+
+class ReglaConversionComprobante(models.Model):
+    """
+    Define qué conversiones entre tipos de comprobante están permitidas
+    y cómo se comportan. Configurable desde el frontend.
+    """
+    tipo_origen = models.ForeignKey(
+        TipoComprobante,
+        on_delete=models.CASCADE,
+        related_name='reglas_como_origen',
+        verbose_name='Tipo de comprobante origen',
+    )
+    tipo_destino = models.ForeignKey(
+        TipoComprobante,
+        on_delete=models.CASCADE,
+        related_name='reglas_como_destino',
+        verbose_name='Tipo de comprobante destino',
+    )
+    etiqueta = models.CharField(
+        max_length=60,
+        blank=True,
+        verbose_name='Etiqueta del botón',
+        help_text='Ej: "Convertir a Factura". Si se deja vacío se genera automáticamente.',
+    )
+    copia_items = models.BooleanField(
+        default=True,
+        verbose_name='Copiar ítems',
+        help_text='Si está activo, los ítems del comprobante origen se copian al nuevo.',
+    )
+    copia_cliente = models.BooleanField(
+        default=True,
+        verbose_name='Copiar cliente',
+    )
+    copia_condicion_venta = models.BooleanField(
+        default=True,
+        verbose_name='Copiar condición de venta',
+    )
+    activo = models.BooleanField(default=True)
+    orden = models.PositiveSmallIntegerField(
+        default=0,
+        verbose_name='Orden de aparición',
+        help_text='Menor número aparece primero.',
+    )
+    confirmar_automaticamente = models.BooleanField(
+        default=False,
+        verbose_name='Confirmar automáticamente',
+        help_text='Si está activo, el comprobante destino se confirma al crear. Si no, queda en Borrador.',
+    )
+
+    class Meta:
+        verbose_name = 'Regla de Conversión de Comprobante'
+        verbose_name_plural = 'Reglas de Conversión de Comprobantes'
+        ordering = ['orden', 'tipo_origen__nombre']
+        unique_together = [['tipo_origen', 'tipo_destino']]
+
+    def __str__(self):
+        return self.etiqueta or f'{self.tipo_origen.nombre} → {self.tipo_destino.nombre}'
+
+    def save(self, *args, **kwargs):
+        if not self.etiqueta:
+            self.etiqueta = f'Convertir a {self.tipo_destino.nombre}'
+        super().save(*args, **kwargs)

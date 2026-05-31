@@ -26,6 +26,10 @@ def get_default_moneda_pk():
 
 class Cliente(models.Model):
 
+    class Estado(models.TextChoices):
+        ACTIVO = 'ACT', 'Activo'
+        INACTIVO = 'INA', 'Inactivo'
+
     class Categoria(models.TextChoices):
         MINORISTA   = 'MIN', 'Minorista'
         MAYORISTA   = 'MAY', 'Mayorista'
@@ -35,6 +39,14 @@ class Cliente(models.Model):
 
     entidad = models.OneToOneField(
         'entidades.Entidad', on_delete=models.CASCADE, primary_key=True
+    )
+
+    # ── Estado / vigencia ──────────────────────────────────────────
+    estado = models.CharField(
+        max_length=3,
+        choices=Estado.choices,
+        default=Estado.ACTIVO,
+        verbose_name="Estado"
     )
 
     # ── Identificación ─────────────────────────────────────────────
@@ -129,6 +141,10 @@ class Cliente(models.Model):
                 contador.ultimo_valor += 1
                 self.codigo_cliente = f"{contador.prefijo}{str(contador.ultimo_valor).zfill(5)}"
                 contador.save()
+
+        # Sincronizar estado lógico con flag histórico
+        self.estado = self.Estado.ACTIVO if self.esta_activo else self.Estado.INACTIVO
+
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -177,6 +193,10 @@ class ComprobanteVenta(models.Model):
     estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.BORRADOR)
     condicion_venta = models.CharField(max_length=2, choices=CondicionVenta.choices, default=CondicionVenta.CONTADO)
 
+    descuento_global_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0,
+        verbose_name="Descuento Global (%)"
+    )
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0, editable=False)
     impuestos = models.JSONField(default=dict, editable=False)
     total = models.DecimalField(max_digits=12, decimal_places=2, default=0, editable=False)
@@ -333,10 +353,14 @@ class ComprobanteVentaItem(models.Model):
     articulo = models.ForeignKey('inventario.Articulo', on_delete=models.PROTECT, verbose_name="Artículo")
     cantidad = models.DecimalField(max_digits=10, decimal_places=3)
     precio_unitario_original = models.DecimalField(max_digits=12, decimal_places=2, verbose_name="Precio Unitario")
+    descuento_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name="Descuento (%)")
 
     @property
     def subtotal(self):
-        return (self.cantidad or Decimal(0)) * (self.precio_unitario_original or Decimal(0))
+        precio = self.precio_unitario_original or Decimal(0)
+        cantidad = self.cantidad or Decimal(0)
+        factor = Decimal(1) - (self.descuento_pct or Decimal(0)) / Decimal(100)
+        return (cantidad * precio * factor).quantize(Decimal('0.01'))
 
     def __str__(self):
         return f"{self.cantidad} x {self.articulo.descripcion}"

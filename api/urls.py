@@ -1,5 +1,3 @@
-# sistema_gestion/api/urls.py
-
 from django.urls import path, include
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
@@ -7,7 +5,8 @@ from rest_framework_simplejwt.views import (
 )
 
 # Routers de las Apps
-from inventario.urls import router as inventario_router
+# NOTA: inventario se incluye con include() completo para soportar
+# rutas manuales (nested ProveedorArticulo) además del router automático.
 from entidades.urls import router as entidades_router
 from parametros.urls import router as parametros_router
 from ventas.urls import router as ventas_router
@@ -27,17 +26,20 @@ urlpatterns = [
     path('parametros/configuracion/', ConfiguracionEmpresaView.as_view(), name='configuracion-empresa'),
 
     # 3. Dashboard Ejecutivo
-    # Ruta final: /api/dashboard/metrics/
     path('dashboard/metrics/', dashboard_metrics_api, name='api_dashboard_metrics'),
 
-    # 4. Rutas legacy / manuales
+    # 4. Inventario — include completo para que las rutas nested funcionen
+    path('', include('inventario.urls')),
+
+    # 5. Rutas legacy / manuales
     path('', include('ventas.urls')),
+
+    # 6. Incluir urlpatterns manuales de entidades
+    path('', include('entidades.urls')),
 ]
 
-# 5. Routers automáticos
-urlpatterns += inventario_router.urls
-urlpatterns += entidades_router.urls
+# 7. Routers automáticos
 urlpatterns += parametros_router.urls
 urlpatterns += ventas_router.urls
 urlpatterns += compras_router.urls
-urlpatterns += finanzas_router.urls
+urlpatterns += [path('finanzas/', include(finanzas_router.urls))]
