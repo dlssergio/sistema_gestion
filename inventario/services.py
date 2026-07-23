@@ -245,7 +245,7 @@ class TransferenciaService:
                 cantidad=-item.cantidad, # Resta
                 origen_sistema='TRANSFERENCIA',
                 origen_referencia=ref,
-                usuario=transferencia.creado_por,
+                usuario=transferencia.created_by,
                 permitir_stock_negativo=None
             )
 
@@ -258,7 +258,7 @@ class TransferenciaService:
                 cantidad=item.cantidad, # Suma
                 origen_sistema='TRANSFERENCIA',
                 origen_referencia=ref,
-                usuario=transferencia.creado_por
+                usuario=transferencia.created_by
             )
 
         # Actualizar estado
@@ -288,7 +288,7 @@ class TransferenciaService:
                 cantidad=-item.cantidad, # Resta lo que estaba viajando
                 origen_sistema='TRANSFERENCIA',
                 origen_referencia=ref,
-                usuario=transferencia.creado_por,
+                usuario=transferencia.created_by,
                 permitir_stock_negativo=True # Permitimos porque es un clearing técnico
             )
 
@@ -300,7 +300,7 @@ class TransferenciaService:
                 cantidad=item.cantidad, # Suma al stock disponible
                 origen_sistema='TRANSFERENCIA',
                 origen_referencia=ref,
-                usuario=transferencia.creado_por
+                usuario=transferencia.created_by
             )
 
         # Actualizar estado
@@ -341,7 +341,7 @@ class AjusteService:
                 cantidad=cantidad_final,
                 origen_sistema='AJUSTE_MANUAL',
                 origen_referencia=ref,
-                usuario=ajuste.creado_por,
+                usuario=ajuste.created_by,
                 observaciones=ajuste.observaciones,
                 # IMPORTANTE: Permitimos negativo si es una corrección de stock,
                 # pero el StockManager igual validará si el depósito/artículo lo prohíben

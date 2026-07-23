@@ -90,6 +90,8 @@ class SerieDocumentoAdmin(admin.ModelAdmin):
     list_display = (
     'nombre', 'tipo_comprobante', 'punto_venta', 'ultimo_numero', 'es_manual', 'solicitar_cae_automaticamente', 'activo', 'diseno_impresion')
 
+    filter_horizontal = ('usuarios_autorizados',)
+
     list_filter = ('tipo_comprobante', 'es_manual', 'activo')
     search_fields = ('nombre', 'punto_venta')
 
@@ -98,7 +100,7 @@ class SerieDocumentoAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ('Configuración Principal', {
-            'fields': ('nombre', 'tipo_comprobante', 'punto_venta', 'activo')
+            'fields': ('nombre', 'tipo_comprobante', 'punto_venta', 'activo', 'usuarios_autorizados')
         }),
         ('Numeración y Automatización', {
             'fields': (

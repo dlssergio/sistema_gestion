@@ -20,8 +20,8 @@ class ComprobanteVentaAdminForm(forms.ModelForm):
         empty_label="--- Seleccione Medio ---"
     )
     cobro_destino = forms.ModelChoiceField(
-        # CORRECCIÓN: Usamos 'activa=True' en lugar de 'estado=ACT'
-        queryset=CuentaFondo.objects.filter(activa=True),
+        # CORRECCIÓN: Usamos 'is_active=True' en lugar de 'estado=ACT'
+        queryset=CuentaFondo.objects.filter(is_active=True),
         required=False,
         label="Caja / Banco Destino",
         empty_label="--- Seleccione Destino ---"

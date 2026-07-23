@@ -87,7 +87,7 @@ class CuentaFondoViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = CuentaFondo.objects.all()
         if activa := self.request.query_params.get('activa'):
-            qs = qs.filter(activa=(activa.lower() == 'true'))
+            qs = qs.filter(is_active=(activa.lower() == 'true'))
         if tipo := self.request.query_params.get('tipo'):
             qs = qs.filter(tipo=tipo)
         return qs

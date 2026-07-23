@@ -101,11 +101,11 @@ class ArticuloAdmin(admin.ModelAdmin):
     list_display = (
         'cod_articulo', 'descripcion', 'marca',
         'stock_fisico_total', 'stock_comprometido_total',
-        'display_precio_venta', 'esta_activo',
+        'display_precio_venta', 'is_active',
         'get_proveedor_fuente_costo',
         'boton_kardex'
     )
-    list_filter = ('esta_activo', 'marca', 'rubro', 'perfil')
+    list_filter = ('is_active', 'marca', 'rubro', 'perfil')
     search_fields = ('cod_articulo', 'descripcion', 'ean')
 
     autocomplete_fields = [
@@ -119,7 +119,7 @@ class ArticuloAdmin(admin.ModelAdmin):
         ('Información Principal',
          {'fields': (
              'cod_articulo', 'ean', 'qr', 'descripcion', 'foto', 'ubicacion', 'perfil', 'marca', 'rubro',
-             'esta_activo')}),
+             'is_active')}),
         ('Precios, Costos e Impuestos',
          {'fields': (
              ('precio_costo_monto', 'precio_costo_moneda'),
@@ -279,8 +279,8 @@ class MovimientoStockAdmin(admin.ModelAdmin):
             return f"Sale de: {origen}"
 
     def save_model(self, request, obj, form, change):
-        if not obj.creado_por:
-            obj.creado_por = request.user
+        if not obj.created_by:
+            obj.created_by = request.user
         super().save_model(request, obj, form, change)
 
     def save_formset(self, request, form, formset, change):
@@ -359,7 +359,7 @@ class TransferenciaInternaAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         if not obj.pk:
-            obj.creado_por = request.user
+            obj.created_by = request.user
         super().save_model(request, obj, form, change)
 
 
@@ -380,7 +380,7 @@ class ItemAjusteStockInline(admin.TabularInline):
 
 @admin.register(AjusteStock)
 class AjusteStockAdmin(admin.ModelAdmin):
-    list_display = ('id', 'fecha', 'motivo', 'deposito', 'estado_visual', 'creado_por')
+    list_display = ('id', 'fecha', 'motivo', 'deposito', 'estado_visual', 'created_by')
     list_filter = ('estado', 'motivo', 'deposito', 'fecha')
     search_fields = ('observaciones',)
     inlines = [ItemAjusteStockInline]
@@ -415,7 +415,7 @@ class AjusteStockAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         if not obj.pk:
-            obj.creado_por = request.user
+            obj.created_by = request.user
         super().save_model(request, obj, form, change)
 
 

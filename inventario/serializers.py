@@ -202,7 +202,7 @@ class ArticuloListSerializer(serializers.ModelSerializer):
             'marca_nombre', 'rubro_nombre',
             'perfil', 'perfil_display',
             'es_servicio', 'es_bien_de_uso',
-            'administra_stock', 'esta_activo',
+            'administra_stock', 'is_active',
             'stock_total', 'stock_disponible',
             'stock_minimo', 'necesita_reposicion',
             'precio_costo_monto', 'precio_venta_monto', 'utilidad',
@@ -297,7 +297,7 @@ class ArticuloDetailSerializer(serializers.ModelSerializer):
             'peso_kg', 'alto_cm', 'ancho_cm', 'profundidad_cm',
             'garantia_meses', 'ubicacion',
             # General
-            'esta_activo', 'foto', 'observaciones', 'nota',
+            'is_active', 'foto', 'observaciones', 'nota',
             # Relaciones
             'proveedor_principal',
             'proveedores_articulo',
@@ -405,7 +405,7 @@ class ArticuloWriteSerializer(serializers.ModelSerializer):
     )
 
     # Booleanos explícitos: aceptan "true"/"false" string desde FormData
-    esta_activo            = serializers.BooleanField(required=False)
+    is_active              = serializers.BooleanField(required=False)
     administra_stock       = serializers.BooleanField(required=False)
     permite_stock_negativo = serializers.BooleanField(required=False)
     es_servicio            = serializers.BooleanField(required=False)
@@ -435,7 +435,7 @@ class ArticuloWriteSerializer(serializers.ModelSerializer):
             'peso_kg', 'alto_cm', 'ancho_cm', 'profundidad_cm',
             'garantia_meses', 'ubicacion',
             # General
-            'esta_activo', 'foto', 'observaciones', 'nota',
+            'is_active', 'foto', 'observaciones', 'nota',
         ]
 
     def to_internal_value(self, data):
@@ -452,7 +452,7 @@ class ArticuloWriteSerializer(serializers.ModelSerializer):
             data = dict(data)
 
         BOOL_FIELDS = [
-            'esta_activo', 'administra_stock', 'permite_stock_negativo',
+            'is_active', 'administra_stock', 'permite_stock_negativo',
             'es_servicio', 'es_bien_de_uso',
         ]
         for field in BOOL_FIELDS:
@@ -540,7 +540,7 @@ class AjusteStockSerializer(serializers.ModelSerializer):
     motivo_nombre = serializers.CharField(source='motivo.nombre', read_only=True)
     deposito_nombre = serializers.CharField(source='deposito.nombre', read_only=True)
     estado_display = serializers.CharField(source='get_estado_display', read_only=True)
-    creado_por_nombre = serializers.SerializerMethodField()
+    created_by_nombre = serializers.SerializerMethodField()
 
     class Meta:
         model = AjusteStock
@@ -549,21 +549,21 @@ class AjusteStockSerializer(serializers.ModelSerializer):
             'motivo', 'motivo_nombre',
             'estado', 'estado_display',
             'observaciones', 'stock_aplicado',
-            'creado_por', 'creado_por_nombre',
+            'created_by', 'created_by_nombre',
             'items',
         ]
-        read_only_fields = ['estado', 'stock_aplicado', 'creado_por']
+        read_only_fields = ['estado', 'stock_aplicado', 'created_by']
 
-    def get_creado_por_nombre(self, obj):
-        if obj.creado_por:
-            return obj.creado_por.get_full_name() or obj.creado_por.username
+    def get_created_by_nombre(self, obj):
+        if obj.created_by:
+            return obj.created_by.get_full_name() or obj.created_by.username
         return None
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')
         request = self.context.get('request')
         if request and request.user.is_authenticated:
-            validated_data['creado_por'] = request.user
+            validated_data['created_by'] = request.user
         ajuste = AjusteStock.objects.create(**validated_data)
         for item_data in items_data:
             ItemAjusteStock.objects.create(ajuste=ajuste, **item_data)
@@ -608,7 +608,7 @@ class TransferenciaSerializer(serializers.ModelSerializer):
     origen_nombre = serializers.CharField(source='origen.nombre', read_only=True)
     destino_nombre = serializers.CharField(source='destino.nombre', read_only=True)
     estado_display = serializers.CharField(source='get_estado_display', read_only=True)
-    creado_por_nombre = serializers.SerializerMethodField()
+    created_by_nombre = serializers.SerializerMethodField()
 
     class Meta:
         model = TransferenciaInterna
@@ -619,17 +619,17 @@ class TransferenciaSerializer(serializers.ModelSerializer):
             'estado', 'estado_display',
             'observaciones',
             'movimiento_salida_aplicado', 'movimiento_entrada_aplicado',
-            'creado_por', 'creado_por_nombre',
+            'created_by', 'created_by_nombre',
             'items',
         ]
         read_only_fields = [
             'estado', 'movimiento_salida_aplicado',
-            'movimiento_entrada_aplicado', 'creado_por',
+            'movimiento_entrada_aplicado', 'created_by',
         ]
 
-    def get_creado_por_nombre(self, obj):
-        if obj.creado_por:
-            return obj.creado_por.get_full_name() or obj.creado_por.username
+    def get_created_by_nombre(self, obj):
+        if obj.created_by:
+            return obj.created_by.get_full_name() or obj.created_by.username
         return None
 
     def validate(self, data):
@@ -645,7 +645,7 @@ class TransferenciaSerializer(serializers.ModelSerializer):
         items_data = validated_data.pop('items')
         request = self.context.get('request')
         if request and request.user.is_authenticated:
-            validated_data['creado_por'] = request.user
+            validated_data['created_by'] = request.user
         transferencia = TransferenciaInterna.objects.create(**validated_data)
         for item_data in items_data:
             ItemTransferencia.objects.create(transferencia=transferencia, **item_data)

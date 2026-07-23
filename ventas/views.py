@@ -52,6 +52,7 @@ from .models import (
 )
 from .services import TaxCalculatorService, PricingService
 from .serializers import ComprobanteVentaSerializer, ComprobanteVentaCreateSerializer
+from rest_framework.decorators import action
 
 DECIMAL_2 = Decimal("0.01")
 
@@ -89,7 +90,7 @@ def _get_or_create_recargo_article():
             "descripcion": "Recargo Financiero / Intereses",
             "precio_venta_monto": Decimal("0.00"),
             "administra_stock": False,
-            "esta_activo": True,
+            "is_active": True,
             "rubro": rubro_financiero,
         },
     )
@@ -156,18 +157,18 @@ def _resolve_destino_from_pago(pago):
         return CuentaFondo.objects.get(pk=destino_id)
     metodo = (pago.get("metodo") or "").upper()
     if metodo == "EF":
-        destino = CuentaFondo.objects.filter(pk=1, activa=True).first()
+        destino = CuentaFondo.objects.filter(pk=1, is_active=True).first()
         if destino:
             return destino
         destino = (
-            CuentaFondo.objects.filter(activa=True, tipo=CuentaFondo.Tipo.EFECTIVO).order_by("id").first()
-            or CuentaFondo.objects.filter(activa=True).order_by("id").first()
+            CuentaFondo.objects.filter(is_active=True, tipo=CuentaFondo.Tipo.EFECTIVO).order_by("id").first()
+            or CuentaFondo.objects.filter(is_active=True).order_by("id").first()
         )
         if not destino:
             raise ValidationError("No existe una cuenta/caja destino activa para efectivo.")
         return destino
     if metodo in ("DB", "CR"):
-        destino = CuentaFondo.objects.filter(pk=3, activa=True).first()
+        destino = CuentaFondo.objects.filter(pk=3, is_active=True).first()
         if destino:
             return destino
         raise ValidationError("No existe la cuenta puente de tarjetas (id 3) o no está activa.")
@@ -267,7 +268,7 @@ def _registrar_pagos_contado(comprobante, request, pagos_data):
         estado=Recibo.Estado.CONFIRMADO,
         origen=Recibo.Origen.CONTADO,
         observaciones=f"Cobro auto. Factura {comprobante.numero_completo}",
-        creado_por=request.user,
+        created_by=request.user,
     )
     total_pagado = Decimal("0.00")
     for pago in pagos_data:
@@ -528,17 +529,40 @@ class ComprobanteVentaViewSet(viewsets.ModelViewSet):
                 items_data = serializer.validated_data.pop('items')
                 datos_comprobante = serializer.validated_data
                 self._resolver_serie_y_deposito(datos_comprobante)
+
                 comprobante = ComprobanteVenta.objects.create(**datos_comprobante)
+
                 for item_data in items_data:
                     ComprobanteVentaItem.objects.create(comprobante=comprobante, **item_data)
+
                 _recalcular_totales_comprobante(comprobante)
+
                 pagos_data = request.data.get('pagos', [])
                 pagos_normalizados, _recargo_total = _normalizar_pagos_y_aplicar_recargos(comprobante, pagos_data)
+
                 if pagos_normalizados and comprobante.condicion_venta == ComprobanteVenta.CondicionVenta.CONTADO:
                     _registrar_pagos_contado(comprobante, request, pagos_normalizados)
+
                 comprobante.refresh_from_db()
+
+            # 🚀 AQUÍ VA LA LÓGICA ROBUSTA DE AFIP (Fuera de la transacción para evitar bloqueos)
+            if comprobante.estado == ComprobanteVenta.Estado.CONFIRMADO and not comprobante.cae and comprobante.serie:
+                config = ConfiguracionEmpresa.objects.first()
+                if config and getattr(config, 'usar_factura_electronica', True):
+                    modo_fact = str(getattr(config, 'modo_facturacion', '')).strip().upper()
+                    es_auto_empresa = modo_fact in ['AUTO', 'TRUE', '1', 'T']
+
+                    if hasattr(config, 'solicitar_cae_automaticamente'):
+                        es_auto_empresa = getattr(config, 'solicitar_cae_automaticamente')
+
+                    if es_auto_empresa and getattr(comprobante.serie, 'solicitar_cae_automaticamente', False):
+                        schema_name = getattr(request.tenant, 'schema_name', 'public')
+                        from ventas.tasks import tarea_solicitar_cae
+                        tarea_solicitar_cae.delay(comprobante.pk, schema_name)
+
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         read_serializer = ComprobanteVentaSerializer(comprobante)
         headers = self.get_success_headers(read_serializer.data)
         return Response(read_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
@@ -553,8 +577,10 @@ class ComprobanteVentaViewSet(viewsets.ModelViewSet):
                 comprobante = serializer.save()
                 if not getattr(comprobante, 'descuento_global_pct', 0):
                     _recalcular_totales_comprobante(comprobante)
+
                 pagos_data = request.data.get('pagos', [])
                 pagos_normalizados, _recargo_total = _normalizar_pagos_y_aplicar_recargos(comprobante, pagos_data)
+
                 if pagos_normalizados and comprobante.condicion_venta == ComprobanteVenta.CondicionVenta.CONTADO:
                     ya_existe = Recibo.objects.filter(
                         cliente=comprobante.cliente,
@@ -564,14 +590,56 @@ class ComprobanteVentaViewSet(viewsets.ModelViewSet):
                     if not ya_existe:
                         _registrar_pagos_contado(comprobante, request, pagos_normalizados)
                 comprobante.refresh_from_db()
+
+            # 🚀 AQUÍ SE REPITE LA LÓGICA DE AFIP
+            if comprobante.estado == ComprobanteVenta.Estado.CONFIRMADO and not comprobante.cae and comprobante.serie:
+                config = ConfiguracionEmpresa.objects.first()
+                if config and getattr(config, 'usar_factura_electronica', True):
+                    modo_fact = str(getattr(config, 'modo_facturacion', '')).strip().upper()
+                    es_auto_empresa = modo_fact in ['AUTO', 'TRUE', '1', 'T']
+
+                    if hasattr(config, 'solicitar_cae_automaticamente'):
+                        es_auto_empresa = getattr(config, 'solicitar_cae_automaticamente')
+
+                    if es_auto_empresa and getattr(comprobante.serie, 'solicitar_cae_automaticamente', False):
+                        schema_name = getattr(request.tenant, 'schema_name', 'public')
+                        from ventas.tasks import tarea_solicitar_cae
+                        tarea_solicitar_cae.delay(comprobante.pk, schema_name)
+
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         read_serializer = ComprobanteVentaSerializer(comprobante)
         return Response(read_serializer.data, status=status.HTTP_200_OK)
 
     def partial_update(self, request, *args, **kwargs):
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
+
+    @action(detail=True, methods=['post'], url_path='reintentar-cae')
+    def reintentar_cae(self, request, pk=None):
+        """
+        Endpoint para reintentar o solicitar el CAE manualmente desde el Frontend.
+        URL generada: POST /api/comprobantes-venta/{pk}/reintentar-cae/
+        """
+        comprobante = self.get_object()
+
+        if comprobante.cae:
+            return Response({'error': 'El comprobante ya posee CAE.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if comprobante.estado != ComprobanteVenta.Estado.CONFIRMADO:
+            return Response({'error': 'El comprobante debe estar Confirmado para solicitar CAE.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # Enviar a Celery (o procesar sincrónicamente, según prefieras)
+        schema_name = getattr(request.tenant, 'schema_name', 'public')
+        from ventas.tasks import tarea_solicitar_cae
+        tarea_solicitar_cae.delay(comprobante.pk, schema_name)
+
+        return Response({
+            'ok': True,
+            'mensaje': 'Solicitud enviada a AFIP. Por favor, actualice en unos segundos.'
+        }, status=status.HTTP_200_OK)
 
 
 # ==============================================================================

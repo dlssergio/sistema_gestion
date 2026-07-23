@@ -21,9 +21,9 @@ from .views import reporte_cashflow_view, libro_iva_view, exportar_libro_iva_vie
 
 @admin.register(CentroCosto)
 class CentroCostoAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'codigo', 'activo')
+    list_display = ('nombre', 'codigo', 'is_active')
     search_fields = ('nombre', 'codigo')
-    list_filter = ('activo',)
+    list_filter = ('is_active',)
 
 
 @admin.register(TipoValor)
@@ -41,8 +41,8 @@ class BancoAdmin(admin.ModelAdmin):
 
 @admin.register(CuentaFondo)
 class CuentaFondoAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'tipo', 'moneda', 'saldo_actual_fmt', 'banco', 'activa')
-    list_filter = ('tipo', 'moneda', 'activa')
+    list_display = ('nombre', 'tipo', 'moneda', 'saldo_actual_fmt', 'banco', 'is_active')
+    list_filter = ('tipo', 'moneda', 'is_active')
     search_fields = ('nombre', 'cbu', 'alias')
     autocomplete_fields = ['banco', 'moneda']
 
@@ -216,16 +216,16 @@ class TransferenciaInternaAdmin(admin.ModelAdmin):
     list_display = ('fecha', 'origen', 'destino', 'monto', 'estado', 'finanzas_aplicadas')
     list_filter = ('estado', 'fecha', 'origen', 'destino')
     autocomplete_fields = ['origen', 'destino']
-    readonly_fields = ('finanzas_aplicadas', 'creado_por')
+    readonly_fields = ('finanzas_aplicadas', 'created_by')
 
     fieldsets = (
-        ('Detalles', {'fields': ('fecha', 'estado', 'creado_por')}),
+        ('Detalles', {'fields': ('fecha', 'estado', 'created_by')}),
         ('Movimiento', {'fields': ('origen', 'destino', 'monto')}),
         ('Referencias', {'fields': ('concepto', 'referencia')})
     )
 
     def save_model(self, request, obj, form, change):
-        if not obj.pk: obj.creado_por = request.user
+        if not obj.pk: obj.created_by = request.user
         super().save_model(request, obj, form, change)
 
 
@@ -262,8 +262,8 @@ class PlanCuotaInline(admin.TabularInline):
 
 @admin.register(PlanTarjeta)
 class PlanTarjetaAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'tarjeta', 'activo')
-    list_filter = ('tarjeta', 'activo')
+    list_display = ('nombre', 'tarjeta', 'is_active')
+    list_filter = ('tarjeta', 'is_active')
     inlines = [PlanCuotaInline]
 
 
@@ -307,7 +307,7 @@ class LiquidacionTarjetaAdmin(admin.ModelAdmin):
     readonly_fields = ('total_bruto', 'total_descuentos', 'total_neto', 'procesada')
 
     def save_model(self, request, obj, form, change):
-        if not obj.pk: obj.creado_por = request.user
+        if not obj.pk: obj.created_by = request.user
         super().save_model(request, obj, form, change)
         if not obj.procesada: obj.calcular_totales()
 
@@ -358,7 +358,7 @@ class CuponTarjetaAdmin(admin.ModelAdmin):
             tarjeta=first.tarjeta,
             numero_liquidacion="BORRADOR-" + timezone.now().strftime("%H%M%S"),
             cuenta_banco=CuentaFondo.objects.filter(tipo=CuentaFondo.Tipo.BANCO).first(),
-            creado_por=request.user
+            created_by=request.user
         )
 
         queryset.update(liquidacion=liq, estado=CuponTarjeta.Estado.PRESENTADO)

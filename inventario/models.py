@@ -368,7 +368,7 @@ class Articulo(models.Model):
     )
 
     # ── General ────────────────────────────────────────────────────
-    esta_activo = models.BooleanField(default=True, verbose_name="¿Está Activo?")
+    is_active = models.BooleanField(default=True, verbose_name="¿Está Activo?")
     foto = models.ImageField(
         upload_to='productos/',
         null=True, blank=True,
@@ -456,10 +456,16 @@ class Articulo(models.Model):
             self.administra_stock = False
 
         if self.precio_costo_monto > 0 and self.utilidad is not None:
-            costo_en_base = self.precio_costo_monto * self.precio_costo_moneda.cotizacion
-            venta_en_base = costo_en_base * (Decimal(1) + (self.utilidad / Decimal(100)))
-            if self.precio_venta_moneda.cotizacion > 0:
-                self.precio_venta_monto = venta_en_base / self.precio_venta_moneda.cotizacion
+            # ── FIX: Casting seguro de variables financieras a Decimal ──
+            cotizacion_costo = Decimal(str(self.precio_costo_moneda.cotizacion or 1))
+            cotizacion_venta = Decimal(str(self.precio_venta_moneda.cotizacion or 1))
+            utilidad_decimal = Decimal(str(self.utilidad or 0))
+
+            costo_en_base = self.precio_costo_monto * cotizacion_costo
+            venta_en_base = costo_en_base * (Decimal('1') + (utilidad_decimal / Decimal('100')))
+
+            if cotizacion_venta > 0:
+                self.precio_venta_monto = venta_en_base / cotizacion_venta
             else:
                 self.precio_venta_monto = venta_en_base
 
@@ -579,7 +585,7 @@ class MovimientoStock(models.Model):
     estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.BORRADOR)
     observaciones = models.TextField(blank=True)
     stock_aplicado = models.BooleanField(default=False, editable=False)
-    creado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
 
     def clean(self):
         if self.tipo_movimiento == self.Tipo.TRANSFERENCIA:
@@ -625,7 +631,7 @@ class MovimientoStock(models.Model):
         from .services import StockManager
 
         ref = f"Mov. Interno #{self.numero}"
-        usuario = self.creado_por
+        usuario = self.created_by
         CODIGO_TIPO_STD = 'REAL'
 
         for item in self.items.all():
@@ -670,7 +676,7 @@ class MovimientoStock(models.Model):
 
         from .services import StockManager
         ref = f"Reversión Mov. #{self.numero}"
-        usuario = self.creado_por
+        usuario = self.created_by
         CODIGO_TIPO_STD = 'REAL'
 
         for item in self.items.all():
@@ -779,7 +785,7 @@ class TransferenciaInterna(models.Model):
     )
     estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.BORRADOR)
     observaciones = models.TextField(blank=True)
-    creado_por = models.ForeignKey(
+    created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         null=True, blank=True,
@@ -837,7 +843,7 @@ class AjusteStock(models.Model):
     motivo = models.ForeignKey(MotivoAjuste, on_delete=models.PROTECT)
     estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.BORRADOR)
     observaciones = models.TextField(blank=True)
-    creado_por = models.ForeignKey(
+    created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         null=True, blank=True,

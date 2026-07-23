@@ -91,7 +91,7 @@ class ArticuloViewSet(viewsets.ModelViewSet):
         if marca_id:
             qs = qs.filter(marca_id=marca_id)
         if activo is not None and activo != '':
-            qs = qs.filter(esta_activo=(activo.lower() == 'true'))
+            qs = qs.filter(is_active=(activo.lower() == 'true'))
         if perfil:
             qs = qs.filter(perfil=perfil)
         if administra_stock is not None and administra_stock != '':
@@ -118,8 +118,8 @@ class ArticuloViewSet(viewsets.ModelViewSet):
         Solo desactivación lógica.
         """
         articulo = self.get_object()
-        articulo.esta_activo = False
-        articulo.save(update_fields=['esta_activo'])
+        articulo.is_active = False
+        articulo.save(update_fields=['is_active'])
         return Response(
             {'detail': f"Artículo '{articulo.descripcion}' desactivado correctamente."},
             status=status.HTTP_200_OK
@@ -128,15 +128,15 @@ class ArticuloViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='desactivar')
     def desactivar(self, request, pk=None):
         articulo = self.get_object()
-        articulo.esta_activo = False
-        articulo.save(update_fields=['esta_activo'])
+        articulo.is_active = False
+        articulo.save(update_fields=['is_active'])
         return Response({'detail': 'Artículo desactivado.'}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='activar')
     def activar(self, request, pk=None):
         articulo = self.get_object()
-        articulo.esta_activo = True
-        articulo.save(update_fields=['esta_activo'])
+        articulo.is_active = True
+        articulo.save(update_fields=['is_active'])
         return Response({'detail': 'Artículo activado.'}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['get'], url_path='stock')
@@ -233,7 +233,7 @@ class ArticuloViewSet(viewsets.ModelViewSet):
         """
         articulos = self.get_queryset().filter(
             administra_stock=True,
-            esta_activo=True,
+            is_active=True,
             stock_minimo__gt=0,
         )
         # Filtrar con la propiedad calculada en Python
@@ -250,13 +250,13 @@ class ArticuloViewSet(viewsets.ModelViewSet):
         KPIs de inventario para el panel principal.
         Responde todas las métricas en una sola llamada.
         """
-        total_articulos = Articulo.objects.filter(esta_activo=True).count()
+        total_articulos = Articulo.objects.filter(is_active=True).count()
         sin_stock = 0
         bajo_minimo = 0
         valor_total = 0
 
         articulos_con_stock = Articulo.objects.filter(
-            esta_activo=True, administra_stock=True
+            is_active=True, administra_stock=True
         ).prefetch_related('stocks', 'balances_stock__tipo_stock')
 
         for a in articulos_con_stock:
@@ -394,7 +394,7 @@ class AjusteStockViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = AjusteStock.objects.select_related(
-            'deposito', 'motivo', 'creado_por'
+            'deposito', 'motivo', 'created_by'
         ).prefetch_related('items__articulo').order_by('-fecha')
 
         deposito_id = self.request.query_params.get('deposito')
@@ -491,7 +491,7 @@ class TransferenciaViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = TransferenciaInterna.objects.select_related(
-            'origen', 'destino', 'creado_por'
+            'origen', 'destino', 'created_by'
         ).prefetch_related('items__articulo').order_by('-fecha')
 
         estado = self.request.query_params.get('estado')
@@ -1058,7 +1058,7 @@ class ActualizacionPreciosView(viewsets.ViewSet):
 
         qs = Articulo.objects.select_related('precio_costo_moneda', 'precio_venta_moneda')
         if solo_activos:
-            qs = qs.filter(esta_activo=True)
+            qs = qs.filter(is_active=True)
         if rubro_id:
             qs = qs.filter(rubro_id=rubro_id)
         if marca_id:

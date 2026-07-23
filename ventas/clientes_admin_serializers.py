@@ -129,7 +129,7 @@ class ClienteAdminListSerializer(serializers.ModelSerializer):
             'price_list_label',
             'saldo',
             'fecha_alta',
-            'esta_activo',
+            'is_active',
             'observaciones',
         ]
 
@@ -230,7 +230,7 @@ class ClienteAdminDetailSerializer(serializers.ModelSerializer):
             'contacto_telefono',
             'saldo',
             'fecha_alta',
-            'esta_activo',
+            'is_active',
             'observaciones',
             'domicilios',
             'telefonos',
@@ -386,7 +386,7 @@ class ClienteAdminWriteSerializer(serializers.Serializer):
     contacto_email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
     contacto_telefono = serializers.CharField(max_length=50, required=False, allow_blank=True, allow_null=True)
     fecha_alta = serializers.DateField(required=False, allow_null=True)
-    esta_activo = serializers.BooleanField(required=False)
+    is_active = serializers.BooleanField(required=False)
     observaciones = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     domicilios = DomicilioSerializer(many=True, required=False)
@@ -523,7 +523,7 @@ class ClienteAdminWriteSerializer(serializers.Serializer):
             contacto_email=validated_data.get('contacto_email'),
             contacto_telefono=validated_data.get('contacto_telefono'),
             fecha_alta=validated_data.get('fecha_alta'),
-            esta_activo=validated_data.get('esta_activo', True),
+            is_active=validated_data.get('is_active', True),
             observaciones=validated_data.get('observaciones'),
         )
         cliente.save()
@@ -561,7 +561,7 @@ class ClienteAdminWriteSerializer(serializers.Serializer):
             'contacto_email',
             'contacto_telefono',
             'fecha_alta',
-            'esta_activo',
+            'is_active',
             'observaciones',
         ]
         for field in scalar_fields:

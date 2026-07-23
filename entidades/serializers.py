@@ -1,3 +1,5 @@
+# entidades/serializers.py (VERSIÓN CON AUDITORÍA ERPBaseModel)
+
 from rest_framework import serializers
 from .models import Entidad, SituacionIVA
 from ventas.models import Cliente
@@ -62,7 +64,7 @@ class ClienteSerializer(serializers.ModelSerializer):
             'contacto_nombre',
             'contacto_email',
             'contacto_telefono',
-            'esta_activo',
+            'is_active',
             'observaciones',
             'saldo',
         ]

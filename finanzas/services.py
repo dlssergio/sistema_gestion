@@ -29,7 +29,7 @@ class DashboardService:
         inicio_mes = hoy.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
         # --- 1. KPIs ESCALARES ---
-        liquidez = CuentaFondo.objects.filter(activa=True).aggregate(
+        liquidez = CuentaFondo.objects.filter(is_active=True).aggregate(
             total=Sum('saldo_monto')
         )['total'] or Decimal(0)
 

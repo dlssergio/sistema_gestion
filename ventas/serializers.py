@@ -1,4 +1,4 @@
-# ventas/serializers.py (VERSIÓN FINAL CORREGIDA)
+# ventas/serializers.py (VERSIÓN CON AUDITORÍA ERPBaseModel)
 
 from decimal import Decimal
 from django.db import transaction
@@ -173,12 +173,10 @@ class ComprobanteVentaSerializer(serializers.ModelSerializer):
             'tipo_comprobante',
             'items',
             'observaciones',
-            # AFIP
             'cae',
             'vto_cae',
             'afip_resultado',
             'afip_error',
-            # Override cliente genérico C00000
             'cliente_nombre_override',
             'cliente_cuit_override',
             'cliente_email_override',

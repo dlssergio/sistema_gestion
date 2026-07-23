@@ -1,4 +1,5 @@
-# finanzas/serializers.py
+# finanzas/serializers.py (VERSIÓN CON AUDITORÍA ERPBaseModel)
+
 from rest_framework import serializers
 from .models import TipoValor, CuentaFondo, Banco, PlanCuota, PlanTarjeta, Tarjeta, Cheque, MovimientoFondo
 
@@ -25,7 +26,7 @@ class CuentaFondoSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'nombre', 'tipo', 'tipo_display',
             'saldo_monto', 'moneda', 'moneda_simbolo',
-            'banco', 'banco_nombre', 'cbu', 'alias', 'activa',
+            'banco', 'banco_nombre', 'cbu', 'alias', 'is_active',
         ]
 
 

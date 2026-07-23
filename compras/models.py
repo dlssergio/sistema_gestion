@@ -1,4 +1,4 @@
-# compras/models.py (VERSIÓN FINAL DEFINITIVA - SOPORTE E-CHEQ + STOCK + IMPUESTOS)
+# compras/models.py (VERSIÓN CON AUDITORÍA ERPBaseModel)
 
 from django.db import models, transaction
 from decimal import Decimal
@@ -11,7 +11,10 @@ from django.core.exceptions import ValidationError
 from django.conf import settings
 
 from entidades.models import Entidad
-from parametros.models import Contador, TipoComprobante, Role, Moneda, UnidadMedida, get_default_unidad_medida
+from parametros.models import (
+    ERPBaseModel, Contador, TipoComprobante, Role, Moneda,
+    UnidadMedida, get_default_unidad_medida, get_default_moneda_pk
+)
 from inventario.services import StockService
 from finanzas.models import (
     TipoValor, CuentaFondo, Cheque, MovimientoFondo, Banco,
@@ -20,19 +23,10 @@ from finanzas.models import (
 from .services import ComprasStockService
 
 
-def get_default_moneda_pk():
-    """
-    Obtiene el PK de la moneda base o crea una por defecto (ARS) si no existe.
-    """
-    moneda, created = Moneda.objects.get_or_create(
-        es_base=True,
-        defaults={'nombre': 'Peso Argentino', 'simbolo': 'ARS', 'cotizacion': 1.00}
-    )
-    return moneda.pk
-
+# Se eliminó la función get_default_moneda_pk local porque se importa directamente de parametros.models
 
 # --- PROVEEDOR ---
-class Proveedor(models.Model):
+class Proveedor(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     entidad = models.OneToOneField(Entidad, on_delete=models.CASCADE, primary_key=True)
 
     # ── Identificación ─────────────────────────────────────────────
@@ -122,7 +116,7 @@ class Proveedor(models.Model):
         verbose_name="Fecha de Alta",
         help_text="Fecha en que se dio de alta el proveedor."
     )
-    esta_activo = models.BooleanField(default=True, verbose_name="¿Está Activo?")
+    # Se eliminó 'esta_activo', ahora se usa is_active de ERPBaseModel
     observaciones = models.TextField(blank=True, null=True, verbose_name="Observaciones")
 
     def __str__(self):
@@ -149,7 +143,7 @@ class Proveedor(models.Model):
 
 
 # --- COMPROBANTE DE COMPRA ---
-class ComprobanteCompra(models.Model):
+class ComprobanteCompra(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     class Estado(models.TextChoices):
         BORRADOR = 'BR', 'Borrador'
         CONFIRMADO = 'CN', 'Confirmado'
@@ -246,16 +240,14 @@ class ComprobanteCompraItem(models.Model):
 
 
 # --- LISTAS DE PRECIOS ---
-class ListaPreciosProveedor(models.Model):
+class ListaPreciosProveedor(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     proveedor = models.ForeignKey('Proveedor', on_delete=models.CASCADE, related_name='listas_precios')
     nombre = models.CharField(max_length=100, verbose_name="Nombre de la Lista")
     codigo = models.CharField(max_length=20, blank=True, verbose_name="Código")
     vigente_desde = models.DateField(default=timezone.now, verbose_name="Vigente Desde")
     vigente_hasta = models.DateField(null=True, blank=True, verbose_name="Vigente Hasta")
-    es_activa = models.BooleanField(default=True, verbose_name="¿Está Activa?")
     es_principal = models.BooleanField(default=False, verbose_name="¿Es la Lista Principal?")
-    fecha_creacion = models.DateTimeField(auto_now_add=True)
-    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    # Se eliminaron 'es_activa', 'fecha_creacion' y 'fecha_actualizacion' a favor de ERPBaseModel
     observaciones = models.TextField(blank=True, verbose_name="Observaciones")
 
     def clean(self):
@@ -330,7 +322,7 @@ class HistorialPrecioProveedor(models.Model):
 
 
 # --- ORDEN DE PAGO ---
-class OrdenPago(models.Model):
+class OrdenPago(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     class Estado(models.TextChoices):
         BORRADOR = 'BR', 'Borrador'
         CONFIRMADO = 'CN', 'Confirmado'
@@ -344,7 +336,9 @@ class OrdenPago(models.Model):
     estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.BORRADOR)
     monto_total = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False)
     observaciones = models.TextField(blank=True)
-    creado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
+
+    # Se eliminó 'creado_por', ahora usamos 'created_by'
+
     finanzas_aplicadas = models.BooleanField(default=False, editable=False)
 
     def save(self, *args, **kwargs):
@@ -380,7 +374,6 @@ class OrdenPago(models.Model):
         with transaction.atomic():
             # ── 1. Generación Automática de Retenciones ──────────────
             total_pagado = sum(v.monto for v in self.valores.all())
-
             monto_ret, regimen = CalculadoraFiscalService.calcular_retencion_ganancias(
                 self.proveedor, total_pagado
             )
@@ -431,7 +424,7 @@ class OrdenPago(models.Model):
                     tipo_valor=valor.tipo,
                     monto_egreso=valor.monto,
                     concepto=f"Pago OP #{self.numero} - {self.proveedor}",
-                    usuario=self.creado_por,
+                    usuario=self.created_by,
                     cheque=cheque_implicado
                 )
 
@@ -457,7 +450,6 @@ class OrdenPago(models.Model):
             return
 
         self.certificados_emitidos.all().delete()
-
         imputaciones = list(self.imputaciones.all())
         valores = list(self.valores.all())
 
@@ -545,7 +537,7 @@ def crear_historial_precio(sender, instance, **kwargs):
 def actualizar_costo_articulo_signal(sender, instance, created, **kwargs):
     from inventario.models import ProveedorArticulo
 
-    articulo  = instance.articulo
+    articulo = instance.articulo
     proveedor = instance.lista_precios.proveedor
 
     # ── 1. Asociar proveedor → artículo si no existe la relación ──────────
@@ -577,8 +569,8 @@ def actualizar_costo_articulo_signal(sender, instance, created, **kwargs):
         if not costo_nuevo or costo_nuevo.amount == 0:
             costo_nuevo = instance.precio_lista
         monto_new = costo_nuevo.amount
-        mon_new   = costo_nuevo.currency.code
-        mon_curr  = articulo.precio_costo_moneda.simbolo if articulo.precio_costo_moneda else 'ARS'
+        mon_new = costo_nuevo.currency.code
+        mon_curr = articulo.precio_costo_moneda.simbolo if articulo.precio_costo_moneda else 'ARS'
         if (articulo.precio_costo_monto != monto_new) or (mon_curr != mon_new):
             articulo.precio_costo_monto = monto_new
             try:
@@ -588,26 +580,6 @@ def actualizar_costo_articulo_signal(sender, instance, created, **kwargs):
             except Exception:
                 pass
             articulo.save()
-
-
-'''
-@receiver(post_save, sender=ComprobanteCompra)
-def aplicar_stock_compra(sender, instance, **kwargs):
-    """
-    Wrapper de compatibilidad.
-    Detecta si es una Recepción (mueve físico) o una OC (mueve previsión)
-    y delega al Service.
-    """
-    if instance.estado == ComprobanteCompra.Estado.CONFIRMADO and not instance.stock_aplicado:
-        tipo = instance.tipo_comprobante
-        if not tipo.mueve_stock:
-            return
-        mueve_fisico = tipo.afecta_stock_fisico
-        if not mueve_fisico:
-            ComprasStockService.confirmar_orden_compra(instance)
-        else:
-            ComprasStockService.procesar_recepcion_mercaderia(instance)
-'''
 
 
 @receiver(post_save, sender=OrdenPago)

@@ -38,7 +38,7 @@ class PriceListService:
 
         # 1. Buscar en la lista principal activa y vigente
         lista_principal = ListaPreciosProveedor.objects.filter(
-            proveedor=proveedor, es_principal=True, es_activa=True,
+            proveedor=proveedor, es_principal=True, is_active=True,
             vigente_desde__lte=fecha
         ).filter(Q(vigente_hasta__isnull=True) | Q(vigente_hasta__gte=fecha)).first()
 
@@ -51,7 +51,7 @@ class PriceListService:
 
         # 2. Si no se encontró, buscar en CUALQUIER otra lista activa y vigente
         otras_listas = ListaPreciosProveedor.objects.filter(
-            proveedor=proveedor, es_principal=False, es_activa=True,
+            proveedor=proveedor, es_principal=False, is_active=True,
             vigente_desde__lte=fecha
         ).filter(Q(vigente_hasta__isnull=True) | Q(vigente_hasta__gte=fecha)).order_by('-vigente_desde')
 

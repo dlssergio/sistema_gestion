@@ -1,4 +1,4 @@
-# ventas/models.py (VERSIÓN COMPLETA: ASOCIADOS MÚLTIPLES + RECIBOS + DISEÑOS)
+# ventas/models.py (VERSIÓN COMPLETA CON AUDITORÍA ERPBaseModel)
 
 from django.db import models, transaction
 from django.utils import timezone
@@ -7,6 +7,7 @@ from decimal import Decimal
 from djmoney.money import Money
 from django.conf import settings
 
+from parametros.models import ERPBaseModel
 from finanzas.models import (
     TipoValor, CuentaFondo, Cheque, MovimientoFondo, Banco, Tarjeta, PlanTarjeta, PlanCuota
 )
@@ -24,17 +25,17 @@ def get_default_moneda_pk():
 
 # --- CLIENTE, COMPROBANTES, LISTAS ---
 
-class Cliente(models.Model):
+class Cliente(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
 
     class Estado(models.TextChoices):
         ACTIVO = 'ACT', 'Activo'
         INACTIVO = 'INA', 'Inactivo'
 
     class Categoria(models.TextChoices):
-        MINORISTA   = 'MIN', 'Minorista'
-        MAYORISTA   = 'MAY', 'Mayorista'
-        VIP         = 'VIP', 'VIP / Premium'
-        GOBIERNO    = 'GOB', 'Gobierno / Institución'
+        MINORISTA = 'MIN', 'Minorista'
+        MAYORISTA = 'MAY', 'Mayorista'
+        VIP = 'VIP', 'VIP / Premium'
+        GOBIERNO = 'GOB', 'Gobierno / Institución'
         EXPORTACION = 'EXP', 'Exportación'
 
     entidad = models.OneToOneField(
@@ -127,7 +128,7 @@ class Cliente(models.Model):
         null=True, blank=True,
         verbose_name="Fecha de Alta"
     )
-    esta_activo = models.BooleanField(default=True, verbose_name="¿Está Activo?")
+    # Se eliminó 'esta_activo', ahora se hereda 'is_active' de ERPBaseModel
     observaciones = models.TextField(blank=True, null=True, verbose_name="Observaciones Internas")
 
     def save(self, *args, **kwargs):
@@ -142,8 +143,8 @@ class Cliente(models.Model):
                 self.codigo_cliente = f"{contador.prefijo}{str(contador.ultimo_valor).zfill(5)}"
                 contador.save()
 
-        # Sincronizar estado lógico con flag histórico
-        self.estado = self.Estado.ACTIVO if self.esta_activo else self.Estado.INACTIVO
+        # Sincronizar estado lógico con flag histórico is_active
+        self.estado = self.Estado.ACTIVO if self.is_active else self.Estado.INACTIVO
 
         super().save(*args, **kwargs)
 
@@ -156,7 +157,7 @@ class Cliente(models.Model):
         verbose_name_plural = "Clientes"
 
 
-class ComprobanteVenta(models.Model):
+class ComprobanteVenta(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     class Estado(models.TextChoices):
         BORRADOR = 'BR', 'Borrador'
         CONFIRMADO = 'CN', 'Confirmado'
@@ -348,7 +349,7 @@ class ComprobanteVenta(models.Model):
         verbose_name_plural = "Comprobantes de Venta"
 
 
-class ComprobanteVentaItem(models.Model):
+class ComprobanteVentaItem(models.Model):  # Mantenido como Model básico (Detalle de comprobante)
     comprobante = models.ForeignKey(ComprobanteVenta, related_name='items', on_delete=models.CASCADE)
     articulo = models.ForeignKey('inventario.Articulo', on_delete=models.PROTECT, verbose_name="Artículo")
     cantidad = models.DecimalField(max_digits=10, decimal_places=3)
@@ -399,7 +400,7 @@ class ComprobanteVentaItem(models.Model):
                             )
 
 
-class PriceList(models.Model):
+class PriceList(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     name = models.CharField(max_length=100, verbose_name="Nombre")
     code = models.CharField(max_length=20, unique=True, verbose_name="Código")
     valid_from = models.DateField(verbose_name="Válido Desde", null=True, blank=True)
@@ -424,7 +425,7 @@ class PriceList(models.Model):
         return self.name
 
 
-class ProductPrice(models.Model):
+class ProductPrice(models.Model):  # Mantenido como Model básico (Detalle de lista)
     """
     Define el precio de un producto para una lista de precios específica,
     con soporte para precios escalonados por cantidad.
@@ -449,7 +450,7 @@ class ProductPrice(models.Model):
 
 
 # --- RECIBOS ---
-class Recibo(models.Model):
+class Recibo(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     class Estado(models.TextChoices):
         BORRADOR = 'BR', 'Borrador'
         CONFIRMADO = 'CN', 'Confirmado'
@@ -467,7 +468,9 @@ class Recibo(models.Model):
     estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.BORRADOR)
     monto_total = models.DecimalField(max_digits=14, decimal_places=2, default=0, editable=False)
     observaciones = models.TextField(blank=True)
-    creado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
+
+    # Se eliminó 'created_by', ahora usamos 'created_by' de ERPBaseModel
+
     finanzas_aplicadas = models.BooleanField(default=False, editable=False)
     origen = models.CharField(
         max_length=3, choices=Origen.choices, default=Origen.COBRANZA,
@@ -525,7 +528,7 @@ class Recibo(models.Model):
                     monto_egreso=valor.monto if es_salida else 0,
                     monto_ingreso=0 if es_salida else valor.monto,
                     concepto=f"{'Devolución' if es_salida else 'Cobro'} Recibo #{self.numero} - {self.cliente}",
-                    usuario=self.creado_por,
+                    usuario=self.created_by,  # <-- SE USA EL NUEVO CAMPO DE AUDITORÍA
                     cheque=nuevo_cheque or valor.cheque_tercero
                 )
 
@@ -625,7 +628,7 @@ class ComprobantePendienteCAE(ComprobanteVenta):
         verbose_name_plural = "⚠️ Bandeja Factura Electrónica (Pendientes)"
 
 
-class DisenoImpresion(models.Model):
+class DisenoImpresion(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     nombre = models.CharField(max_length=50, verbose_name="Nombre del Diseño")
     archivo_template = models.CharField(
         max_length=100,
@@ -671,7 +674,8 @@ class ComprobanteCobroItem(models.Model):
         help_text="Monto a cobrar (El sistema sumará el recargo si corresponde)"
     )
 
-    destino = models.ForeignKey(CuentaFondo, on_delete=models.PROTECT, limit_choices_to={'activa': True})
+    # Se corrigió a is_active=True ya que CuentaFondo ahora hereda de ERPBaseModel
+    destino = models.ForeignKey(CuentaFondo, on_delete=models.PROTECT, limit_choices_to={'is_active': True})
     observaciones = models.CharField(max_length=100, blank=True, help_text="Detalle opcional")
 
     opcion_cuota = models.ForeignKey(

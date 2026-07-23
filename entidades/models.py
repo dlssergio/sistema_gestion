@@ -1,6 +1,8 @@
+# entidades/models.py (VERSIÓN CON AUDITORÍA ERPBaseModel)
+
 from django.db import models
 from django.core.exceptions import ValidationError
-
+from parametros.models import ERPBaseModel # <-- IMPORTAMOS LA CLASE BASE
 
 class TipoDireccion(models.TextChoices):
     FISCAL = 'FISCAL', 'Fiscal'
@@ -8,19 +10,16 @@ class TipoDireccion(models.TextChoices):
     COMERCIAL = 'COMERCIAL', 'Comercial'
     OTRA = 'OTRA', 'Otra'
 
-
 class TipoPersona(models.TextChoices):
     FISICA = 'F', 'Persona Física'
     JURIDICA = 'J', 'Persona Jurídica'
-
 
 class TipoDocumento(models.TextChoices):
     DNI = 'DNI', 'DNI'
     CUIT = 'CUIT', 'CUIT/CUIL'
     OTRO = 'OTRO', 'Otro'
 
-
-class SituacionIVA(models.Model):
+class SituacionIVA(ERPBaseModel): # <-- HEREDA DE ERPBaseModel
     codigo = models.CharField(max_length=3, unique=True, verbose_name="Código")
     nombre = models.CharField(max_length=100, unique=True)
     codigo_afip = models.IntegerField(
@@ -41,8 +40,7 @@ class SituacionIVA(models.Model):
         verbose_name = "Situación frente al IVA"
         verbose_name_plural = "Situaciones frente al IVA"
 
-
-class Entidad(models.Model):
+class Entidad(ERPBaseModel): # <-- HEREDA DE ERPBaseModel
     class Sexo(models.TextChoices):
         MASCULINO = 'M', 'Masculino'
         FEMENINO = 'F', 'Femenino'
@@ -185,7 +183,6 @@ class Entidad(models.Model):
         verbose_name = "Entidad"
         verbose_name_plural = "Entidades"
 
-
 class EntidadDomicilio(models.Model):
     entidad = models.ForeignKey(
         Entidad,
@@ -217,7 +214,6 @@ class EntidadDomicilio(models.Model):
         verbose_name = "Domicilio"
         verbose_name_plural = "Domicilios"
 
-
 class EntidadTelefono(models.Model):
     TIPO_CHOICES = [
         ('FIJO', 'Fijo'),
@@ -240,7 +236,6 @@ class EntidadTelefono(models.Model):
     class Meta:
         verbose_name = "Teléfono"
         verbose_name_plural = "Teléfonos"
-
 
 class EntidadEmail(models.Model):
     entidad = models.ForeignKey(

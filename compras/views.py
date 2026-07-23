@@ -47,7 +47,7 @@ class ProveedorViewSet(viewsets.ModelViewSet):
     """
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields   = ['entidad__razon_social', 'entidad__cuit', 'nombre_fantasia', 'codigo_proveedor']
-    ordering_fields = ['entidad__razon_social', 'codigo_proveedor', 'esta_activo']
+    ordering_fields = ['entidad__razon_social', 'codigo_proveedor', 'is_active']
     ordering        = ['entidad__razon_social']
 
     def get_queryset(self):
@@ -56,7 +56,7 @@ class ProveedorViewSet(viewsets.ModelViewSet):
         )
         activo = self.request.query_params.get('activo')
         if activo is not None:
-            qs = qs.filter(esta_activo=(activo.lower() == 'true'))
+            qs = qs.filter(is_active=(activo.lower() == 'true'))
         return qs
 
     def get_serializer_class(self):
@@ -476,7 +476,7 @@ class ListaPreciosProveedorViewSet(viewsets.ModelViewSet):
                 nombre=nombre,
                 vigente_desde=vigente_desde,
                 vigente_hasta=vigente_hasta or None,
-                es_activa=True,
+                is_active=True,
                 es_principal=es_principal,
             )
             items_origen = ItemListaPreciosProveedor.objects.filter(lista_precios=lista_origen)

@@ -1,4 +1,4 @@
-# compras/admin.py (VERSIÓN FINAL ENTERPRISE: E-CHEQ + FINANZAS)
+# compras/admin.py (VERSIÓN FINAL ENTERPRISE: E-CHEQ + FINANZAS + AUDITORÍA)
 
 from django.contrib import admin
 from django.urls import path, reverse
@@ -183,7 +183,7 @@ class ProveedorAdmin(admin.ModelAdmin):
             proveedor=proveedor,
             fecha=timezone.now(),
             estado=OrdenPago.Estado.BORRADOR,
-            creado_por=request.user
+            created_by=request.user
         )
 
         for comp in pendientes:
@@ -353,8 +353,8 @@ class ItemListaPreciosProveedorInline(admin.TabularInline):
 
 @admin.register(ListaPreciosProveedor)
 class ListaPreciosProveedorAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'proveedor', 'es_principal', 'es_activa', 'vigente_desde', 'vigente_hasta')
-    list_filter = ('proveedor', 'es_activa', 'es_principal')
+    list_display = ('nombre', 'proveedor', 'es_principal', 'is_active', 'vigente_desde', 'vigente_hasta')
+    list_filter = ('proveedor', 'is_active', 'es_principal')
     search_fields = ('nombre', 'proveedor__entidad__razon_social')
     autocomplete_fields = ['proveedor']
     inlines = [ItemListaPreciosProveedorInline]
@@ -404,11 +404,11 @@ class OrdenPagoAdmin(admin.ModelAdmin):
     search_fields = ('numero', 'proveedor__entidad__razon_social')
     autocomplete_fields = ['proveedor', 'serie']
     inlines = [OrdenPagoImputacionInline, OrdenPagoValorInline]
-    readonly_fields = ('numero', 'finanzas_aplicadas', 'monto_total', 'creado_por')
+    readonly_fields = ('numero', 'finanzas_aplicadas', 'monto_total', 'created_by')
 
     fieldsets = (
         ('Encabezado', {'fields': ('serie', 'fecha', 'proveedor', 'estado')}),
-        ('Auditoría', {'fields': ('creado_por', 'finanzas_aplicadas', 'observaciones')})
+        ('Auditoría', {'fields': ('created_by', 'finanzas_aplicadas', 'observaciones')})
     )
 
     class Media:
@@ -424,7 +424,7 @@ class OrdenPagoAdmin(admin.ModelAdmin):
         return custom_urls + urls
 
     def save_model(self, request, obj, form, change):
-        if not obj.pk: obj.creado_por = request.user
+        if not obj.pk: obj.created_by = request.user
         super().save_model(request, obj, form, change)
 
     def save_formset(self, request, form, formset, change):

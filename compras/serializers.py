@@ -1,4 +1,5 @@
-# compras/serializers.py
+# compras/serializers.py (VERSIÓN CON AUDITORÍA ERPBaseModel)
+
 from rest_framework import serializers
 from decimal import Decimal
 from django.db import transaction
@@ -62,7 +63,7 @@ class ProveedorListSerializer(serializers.ModelSerializer):
         model = Proveedor
         fields = [
             'id', 'codigo_proveedor', 'razon_social', 'nombre_fantasia',
-            'cuit', 'situacion_iva', 'plazo_pago_dias', 'esta_activo', 'saldo_deuda',
+            'cuit', 'situacion_iva', 'plazo_pago_dias', 'is_active', 'saldo_deuda',
         ]
 
     def get_saldo_deuda(self, obj):
@@ -96,7 +97,7 @@ class ProveedorDetailSerializer(serializers.ModelSerializer):
             'banco_nombre', 'banco_cbu', 'banco_alias',
             'banco_cuenta_nro', 'banco_tipo_cuenta',
             'contacto_nombre', 'contacto_email', 'contacto_telefono',
-            'fecha_alta', 'esta_activo', 'observaciones',
+            'fecha_alta', 'is_active', 'observaciones',
             'saldo_deuda', 'total_comprado', 'cant_facturas',
         ]
 
@@ -137,7 +138,7 @@ class ProveedorWriteSerializer(serializers.ModelSerializer):
         queryset=Moneda.objects.all(), required=False, allow_null=True
     )
 
-    # ── Campos de Entidad (write-only — se propagan al modelo Entidad) ─────
+    # ── Campos de Entidad (write-only) ─────
     razon_social  = serializers.CharField(required=False, allow_blank=True, write_only=True)
     cuit          = serializers.CharField(required=False, allow_blank=True, allow_null=True, write_only=True)
     email         = serializers.EmailField(required=False, allow_blank=True, allow_null=True, write_only=True)
@@ -157,7 +158,7 @@ class ProveedorWriteSerializer(serializers.ModelSerializer):
             'situacion_iibb', 'nro_iibb',
             'banco_nombre', 'banco_cbu', 'banco_alias', 'banco_cuenta_nro', 'banco_tipo_cuenta',
             'contacto_nombre', 'contacto_email', 'contacto_telefono',
-            'fecha_alta', 'esta_activo', 'observaciones',
+            'fecha_alta', 'is_active', 'observaciones',
         ]
 
     def _pop_entidad_fields(self, validated_data):
@@ -439,7 +440,6 @@ class ItemListaPreciosSerializer(serializers.ModelSerializer):
         return unidad
 
     def _normalizar_descuentos(self, validated_data):
-        """Convierte listas de Decimal a float para que el JSONField sea serializable."""
         for campo in ('descuentos_adicionales', 'descuentos_financieros'):
             if campo in validated_data:
                 validated_data[campo] = [float(v) for v in (validated_data[campo] or [])]
@@ -465,7 +465,7 @@ class ListaPreciosProveedorListSerializer(serializers.ModelSerializer):
     class Meta:
         model = ListaPreciosProveedor
         fields = ['id', 'proveedor', 'proveedor_nombre', 'nombre', 'codigo',
-                  'vigente_desde', 'vigente_hasta', 'es_activa', 'es_principal', 'cant_items']
+                  'vigente_desde', 'vigente_hasta', 'is_active', 'es_principal', 'cant_items']
 
     def get_cant_items(self, obj):
         return obj.items.count()
@@ -479,6 +479,6 @@ class ListaPreciosProveedorDetailSerializer(serializers.ModelSerializer):
         model = ListaPreciosProveedor
         fields = [
             'id', 'proveedor', 'proveedor_nombre', 'nombre', 'codigo',
-            'vigente_desde', 'vigente_hasta', 'es_activa', 'es_principal',
-            'observaciones', 'fecha_creacion', 'fecha_actualizacion', 'items',
+            'vigente_desde', 'vigente_hasta', 'is_active', 'es_principal',
+            'observaciones', 'created_at', 'updated_at', 'items',
         ]

@@ -100,7 +100,7 @@ class ClienteAdmin(admin.ModelAdmin):
             cliente=cliente,
             fecha=timezone.now(),
             estado=Recibo.Estado.BORRADOR,
-            creado_por=request.user
+            created_by=request.user
         )
 
         for comprobante in pendientes:
@@ -133,7 +133,7 @@ class ComprobanteCobroItemInline(admin.TabularInline):
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "destino":
             # Filtramos solo cajas/bancos activos
-            kwargs["queryset"] = CuentaFondo.objects.filter(activa=True)
+            kwargs["queryset"] = CuentaFondo.objects.filter(is_active=True)
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 
@@ -347,6 +347,23 @@ class ComprobanteVentaAdmin(admin.ModelAdmin):
                 obj.estado = ComprobanteVenta.Estado.BORRADOR
 
     def _intentar_facturar_safe(self, obj):
+        from parametros.models import ConfiguracionEmpresa
+        config = ConfiguracionEmpresa.objects.first()
+
+        # Validación 1: Si no hay config o la factura electrónica está apagada
+        if not config or not getattr(config, 'usar_factura_electronica', True):
+            return
+
+        # Validación 2: Modo MANUAL de la empresa
+        modo_fact = str(getattr(config, 'modo_facturacion', 'MANUAL')).strip().upper()
+        if modo_fact in ['MANUAL', 'FALSE', '0']:
+            return
+
+        # Validación 3: El talonario debe ser automático
+        if not getattr(obj.serie, 'solicitar_cae_automaticamente', False):
+            return
+
+        # Si todo es correcto, intentamos emitir
         try:
             manager = AfipManager()
             manager.emitir_comprobante(obj)
@@ -395,7 +412,7 @@ class ComprobanteVentaAdmin(admin.ModelAdmin):
                             'descripcion': "Recargo Financiero / Intereses",
                             'precio_venta_monto': 0,
                             'administra_stock': False,
-                            'esta_activo': True,
+                            'is_active': True,
                             'rubro': rubro_financiero
                         }
                     )
@@ -479,7 +496,7 @@ class ComprobanteVentaAdmin(admin.ModelAdmin):
                 cliente=comprobante.cliente,
                 fecha=comprobante.fecha,
                 estado=Recibo.Estado.CONFIRMADO,
-                creado_por=request.user,
+                created_by=request.user,
                 origen=origen,
                 observaciones=f"Cobro auto Factura {comprobante.numero_completo}"
             )
@@ -569,7 +586,7 @@ class ComprobanteVentaAdmin(admin.ModelAdmin):
                 cliente=obj.cliente,
                 fecha=obj.fecha,
                 estado=Recibo.Estado.BORRADOR,
-                creado_por=request.user,
+                created_by=request.user,
                 origen=origen
             )
             ReciboImputacion.objects.create(recibo=recibo, comprobante=obj, monto_imputado=obj.saldo_pendiente)
@@ -779,10 +796,10 @@ class ReciboAdmin(admin.ModelAdmin):
     search_fields = ('numero', 'cliente__entidad__razon_social')
     autocomplete_fields = ['cliente', 'serie']
     inlines = [ReciboImputacionInline, ReciboValorInline]
-    readonly_fields = ('numero', 'finanzas_aplicadas', 'monto_total', 'creado_por')
+    readonly_fields = ('numero', 'finanzas_aplicadas', 'monto_total', 'created_by')
     fieldsets = (
         ('Encabezado', {'fields': ('serie', 'fecha', 'cliente', 'estado')}),
-        ('Auditoría', {'fields': ('creado_por', 'finanzas_aplicadas', 'observaciones')})
+        ('Auditoría', {'fields': ('created_by', 'finanzas_aplicadas', 'observaciones')})
     )
 
     class Media:
@@ -796,7 +813,7 @@ class ReciboAdmin(admin.ModelAdmin):
         return custom_urls + urls
 
     def save_model(self, request, obj, form, change):
-        if not obj.pk: obj.creado_por = request.user
+        if not obj.pk: obj.created_by = request.user
         super().save_model(request, obj, form, change)
 
     def save_formset(self, request, form, formset, change):

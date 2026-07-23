@@ -69,9 +69,9 @@ class ClienteAdminViewSet(viewsets.ModelViewSet):
 
         estado = (p.get('estado') or '').strip().lower()
         if estado == 'activos':
-            qs = qs.filter(esta_activo=True)
+            qs = qs.filter(is_active=True)
         elif estado == 'inactivos':
-            qs = qs.filter(esta_activo=False)
+            qs = qs.filter(is_active=False)
 
         categoria = p.get('categoria')
         if categoria:
@@ -103,21 +103,21 @@ class ClienteAdminViewSet(viewsets.ModelViewSet):
         return ClienteAdminListSerializer
 
     def perform_destroy(self, instance):
-        instance.esta_activo = False
-        instance.save(update_fields=['esta_activo'])
+        instance.is_active = False
+        instance.save(update_fields=['is_active'])
 
     @action(detail=True, methods=['post'])
     def activar(self, request, pk=None):
         cliente = self.get_object()
-        cliente.esta_activo = True
-        cliente.save(update_fields=['esta_activo'])
+        cliente.is_active = True
+        cliente.save(update_fields=['is_active'])
         return Response({'ok': True}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'])
     def desactivar(self, request, pk=None):
         cliente = self.get_object()
-        cliente.esta_activo = False
-        cliente.save(update_fields=['esta_activo'])
+        cliente.is_active = False
+        cliente.save(update_fields=['is_active'])
         return Response({'ok': True}, status=status.HTTP_200_OK)
 
 

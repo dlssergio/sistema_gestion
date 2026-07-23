@@ -1,4 +1,4 @@
-# finanzas/models.py
+# finanzas/models.py (VERSIÓN COMPLETA CON AUDITORÍA ERPBaseModel)
 
 from django.db import models, transaction
 from django.utils import timezone
@@ -8,19 +8,21 @@ from django.core.exceptions import ValidationError
 from djmoney.models.fields import MoneyField
 from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
-from parametros.models import Moneda, get_default_moneda_pk
+
+from parametros.models import ERPBaseModel, Moneda, get_default_moneda_pk  # <-- IMPORTAMOS LA CLASE BASE
 
 
 # --- 1. CLASIFICACIÓN DE GASTOS/INGRESOS ---
 
-class CentroCosto(models.Model):
+class CentroCosto(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     """
     Permite imputar movimientos a áreas específicas (Marketing, RRHH, Obra X).
     Clave para reportes de rentabilidad reales.
     """
     nombre = models.CharField(max_length=100, unique=True)
     codigo = models.CharField(max_length=20, blank=True, help_text="Código interno (ej: 1.1.0)")
-    activo = models.BooleanField(default=True)
+
+    # Se eliminó 'activo', ahora se hereda 'is_active' de ERPBaseModel
 
     def __str__(self): return f"{self.codigo} - {self.nombre}" if self.codigo else self.nombre
 
@@ -31,7 +33,7 @@ class CentroCosto(models.Model):
 
 # --- 2. CONFIGURACIÓN DE VALORES ---
 
-class TipoValor(models.Model):
+class TipoValor(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     """Define los métodos de pago/cobro."""
     nombre = models.CharField(max_length=50, unique=True)
     requiere_banco = models.BooleanField(default=False, help_text="Pide seleccionar banco (Transferencia).")
@@ -46,7 +48,7 @@ class TipoValor(models.Model):
         verbose_name_plural = "Tipos de Valores"
 
 
-class Banco(models.Model):
+class Banco(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     nombre = models.CharField(max_length=100, unique=True)
     codigo_bcra = models.CharField(max_length=10, blank=True, verbose_name="Código BCRA")
 
@@ -59,7 +61,7 @@ class Banco(models.Model):
 
 # --- 3. CUENTAS DE FONDOS (CAJAS Y BANCOS) ---
 
-class CuentaFondo(models.Model):
+class CuentaFondo(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     class Tipo(models.TextChoices):
         EFECTIVO = 'EF', 'Caja / Efectivo'
         BANCO = 'BA', 'Cuenta Bancaria'
@@ -77,7 +79,7 @@ class CuentaFondo(models.Model):
     cbu = models.CharField(max_length=22, blank=True, verbose_name="CBU / CVU")
     alias = models.CharField(max_length=100, blank=True, verbose_name="Alias CBU")
 
-    activa = models.BooleanField(default=True)
+    # Se eliminó 'activa', ahora se hereda 'is_active' de ERPBaseModel
 
     def __str__(self): return f"{self.nombre} ({self.moneda.simbolo})"
 
@@ -88,7 +90,7 @@ class CuentaFondo(models.Model):
 
 # --- 4. CHEQUES (FÍSICOS Y E-CHEQ) ---
 
-class Cheque(models.Model):
+class Cheque(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     class Estado(models.TextChoices):
         EN_CARTERA = 'CA', 'En Cartera'
         DEPOSITADO = 'DE', 'Depositado (Acred. Pendiente)'
@@ -139,7 +141,7 @@ class Cheque(models.Model):
 
 # --- 4.5 GESTIÓN AVANZADA DE TARJETAS (MODELO ERP) ---
 
-class Tarjeta(models.Model):
+class Tarjeta(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     """
     Entidad financiera (Visa, Master, Amex).
     Se vincula a una cuenta contable transitoria (Cuenta Recaudadora).
@@ -160,14 +162,15 @@ class Tarjeta(models.Model):
     def __str__(self): return self.nombre
 
 
-class PlanTarjeta(models.Model):
+class PlanTarjeta(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     """
     MAESTRO: Define el acuerdo comercial.
     Ej: 'Ahora 12', 'Visa Galicia', 'Cuota Simple'.
     """
     tarjeta = models.ForeignKey(Tarjeta, on_delete=models.CASCADE, related_name='planes')
     nombre = models.CharField(max_length=100, help_text="Ej: Ahora 3, Visa Galicia")
-    activo = models.BooleanField(default=True)
+
+    # Se eliminó 'activo', ahora se hereda 'is_active' de ERPBaseModel
 
     def __str__(self): return f"{self.tarjeta} - {self.nombre}"
 
@@ -190,7 +193,7 @@ class PlanCuota(models.Model):
     def __str__(self): return f"{self.cuotas} cuotas (Coef: {self.coeficiente})"
 
 
-class LiquidacionTarjeta(models.Model):
+class LiquidacionTarjeta(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     """
     Documento que refleja el resumen de pago de la procesadora (Prisma/Fiserv).
     Aquí se transforman los Cupones (Activo exigible) en Dinero en Banco (Activo líquido)
@@ -223,7 +226,8 @@ class LiquidacionTarjeta(models.Model):
     otros_gastos = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     procesada = models.BooleanField(default=False)
-    creado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+
+    # Se eliminó 'creado_por', ahora usamos 'created_by' de ERPBaseModel
 
     def __str__(self):
         return f"Liq {self.tarjeta} #{self.numero_liquidacion}"
@@ -259,7 +263,7 @@ class LiquidacionTarjeta(models.Model):
                 tipo_valor=tipo_val_transf,
                 monto_ingreso=self.total_neto,
                 concepto=f"Liq. {self.tarjeta} #{self.numero_liquidacion} (Acreditación)",
-                usuario=self.creado_por
+                usuario=self.created_by  # <-- SE USA EL NUEVO CAMPO DE AUDITORÍA
             )
             self.cuenta_banco.saldo_monto += self.total_neto
             self.cuenta_banco.save()
@@ -276,7 +280,7 @@ class LiquidacionTarjeta(models.Model):
                 tipo_valor=tipo_val_tarjeta,
                 monto_egreso=self.total_neto,
                 concepto=f"Transferencia a Banco {self.cuenta_banco} (Liq #{self.numero_liquidacion})",
-                usuario=self.creado_por
+                usuario=self.created_by
             )
 
             # B2. Movimientos de Gastos
@@ -298,7 +302,7 @@ class LiquidacionTarjeta(models.Model):
                         tipo_valor=tipo_val_tarjeta,
                         monto_egreso=monto,
                         concepto=f"{desc} - Liq. {self.tarjeta} #{self.numero_liquidacion}",
-                        usuario=self.creado_por
+                        usuario=self.created_by
                     )
                     total_gastos += monto
 
@@ -313,7 +317,7 @@ class LiquidacionTarjeta(models.Model):
             self.save()
 
 
-class CuponTarjeta(models.Model):
+class CuponTarjeta(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     """
     Representa el voucher/cupón físico o digital de una venta con tarjeta.
     No es dinero líquido hasta que el banco lo liquida.
@@ -353,6 +357,7 @@ class CuponTarjeta(models.Model):
 # --- 5. MOVIMIENTOS DE FONDOS (LIBRO DIARIO) ---
 
 class MovimientoFondo(models.Model):
+    # MANTENIDO COMO MODELS.MODEL PORQUE ES EL LEDGER INMUTABLE
     class TipoMov(models.TextChoices):
         INGRESO = 'IN', 'Ingreso'
         EGRESO = 'EG', 'Egreso'
@@ -407,7 +412,7 @@ class MovimientoFondo(models.Model):
 
 # --- TRANSFERENCIAS INTERNAS (MOVIMIENTOS ENTRE CUENTAS) ---
 
-class TransferenciaInterna(models.Model):
+class TransferenciaInterna(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     class Estado(models.TextChoices):
         BORRADOR = 'BR', 'Borrador'
         CONFIRMADO = 'CN', 'Confirmado'
@@ -431,7 +436,8 @@ class TransferenciaInterna(models.Model):
     referencia = models.CharField(max_length=100, blank=True, help_text="N° de Transacción Bancaria o Lote")
 
     estado = models.CharField(max_length=2, choices=Estado.choices, default=Estado.BORRADOR)
-    creado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True)
+
+    # Se eliminó 'creado_por', ahora usamos 'created_by' de ERPBaseModel
 
     # Bandera de control
     finanzas_aplicadas = models.BooleanField(default=False, editable=False)
@@ -467,7 +473,7 @@ class TransferenciaInterna(models.Model):
                 tipo_valor=tipo_valor,
                 monto_egreso=self.monto,
                 concepto=f"TRF Salida a {self.destino}: {self.concepto}",
-                usuario=self.creado_por
+                usuario=self.created_by  # <-- SE USA EL NUEVO CAMPO DE AUDITORÍA
             )
             self.origen.saldo_monto -= self.monto
             self.origen.save()
@@ -480,7 +486,7 @@ class TransferenciaInterna(models.Model):
                 tipo_valor=tipo_valor,
                 monto_ingreso=self.monto,
                 concepto=f"TRF Entrada desde {self.origen}: {self.concepto}",
-                usuario=self.creado_por
+                usuario=self.created_by
             )
             self.destino.saldo_monto += self.monto
             self.destino.save()
@@ -543,7 +549,7 @@ def reversar_al_eliminar_trf(sender, instance, **kwargs):
 #  MÓDULO E: IMPUESTOS Y RETENCIONES
 # ========================================================
 
-class RegimenRetencion(models.Model):
+class RegimenRetencion(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     class Impuesto(models.TextChoices):
         GANANCIAS = 'GAN', 'Ganancias'
         IIBB = 'IIBB', 'Ingresos Brutos'
@@ -571,7 +577,7 @@ class RegimenRetencion(models.Model):
         verbose_name_plural = "Regímenes de Retención"
 
 
-class CertificadoRetencion(models.Model):
+class CertificadoRetencion(ERPBaseModel):  # <-- HEREDA DE ERPBaseModel
     """
     Documento que avala que retuvimos dinero al proveedor.
     Se genera automáticamente desde la Orden de Pago.

@@ -8,6 +8,80 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from django.conf import settings
 
+# ═══════════════════════════════════════════════════════════════════════════
+# CLASES BASE (AUDITORÍA Y SOFT DELETE)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ActivosManager(models.Manager):
+    """
+    Manager por defecto para modelos con Soft Delete.
+    Al usar Modelo.objects.all(), solo devolverá los registros donde is_active=True.
+    Para ver los eliminados, se debe usar Modelo.objects_all_with_deleted.all()
+    """
+    def get_queryset(self):
+        return super().get_queryset().filter(is_active=True)
+
+
+class ERPBaseModel(models.Model):
+    """
+    Modelo abstracto del cual deben heredar TODOS los modelos de negocio del ERP.
+    Provee:
+    - Soft Delete seguro (is_active).
+    - Trazabilidad de creación y modificación (fechas y usuarios).
+    """
+    # 1. Soft Delete
+    is_active = models.BooleanField(
+        default=True,
+        verbose_name="Activo",
+        help_text="Desmarque esta casilla para eliminar (Soft Delete)"
+    )
+    deleted_at = models.DateTimeField(null=True, blank=True, editable=False)
+
+    # 2. Fechas de Auditoría
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="Fecha de Creación")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="Última Modificación")
+
+    # 3. Usuarios de Auditoría
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="%(app_label)s_%(class)s_creados",
+        null=True, blank=True,
+        editable=False,
+        verbose_name="Creado por"
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="%(app_label)s_%(class)s_modificados",
+        null=True, blank=True,
+        editable=False,
+        verbose_name="Modificado por"
+    )
+
+    # Managers
+    objects = ActivosManager()                   # Manager default: oculta eliminados
+    objects_all_with_deleted = models.Manager()  # Manager secundario: trae todo (para reportes o admin)
+
+    class Meta:
+        abstract = True
+
+    def soft_delete(self, user=None):
+        """Elimina lógicamente el registro"""
+        self.is_active = False
+        self.deleted_at = timezone.now()
+        if user:
+            self.updated_by = user
+        self.save(update_fields=['is_active', 'deleted_at', 'updated_by', 'updated_at'])
+
+    def restore(self, user=None):
+        """Restaura un registro eliminado lógicamente"""
+        self.is_active = True
+        self.deleted_at = None
+        if user:
+            self.updated_by = user
+        self.save(update_fields=['is_active', 'deleted_at', 'updated_by', 'updated_at'])
+
 
 # --- MODELOS DE CONFIGURACIÓN GENERAL ---
 
@@ -288,6 +362,15 @@ class SerieDocumento(models.Model):
 
     activo = models.BooleanField(default=True)
 
+    # Relación con los usuarios
+    usuarios_autorizados = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        related_name='series_autorizadas',
+        verbose_name="Usuarios Autorizados",
+        help_text="Seleccione qué usuarios pueden facturar usando este talonario."
+    )
+
     # Auditoría
     fecha_creacion = models.DateTimeField(auto_now_add=True)
 
@@ -501,6 +584,7 @@ class CargaMasiva(models.Model):
 
     class Entidad(models.TextChoices):
         ARTICULOS = 'ARTICULOS', 'Artículos / Inventario'
+        STOCK_INICIAL = 'STOCK_INICIAL', 'Saldos Iniciales de Stock'
         PRECIOS_VENTA = 'PRECIOS_VENTA', 'Listas de Precios (Venta)'
         PRECIOS_COMPRA = 'PRECIOS_COMPRA', 'Listas de Precios (Compra)'
         CLIENTES = 'CLIENTES', 'Clientes'
